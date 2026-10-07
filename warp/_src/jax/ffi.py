@@ -1302,7 +1302,7 @@ class FfiCallable:
                     # check if we already captured an identical call
                     ip = [inputs[i].contents.data for i in self.array_input_indices]
                     op = [outputs[i].contents.data for i in self.array_output_indices]
-                    capture_key = hash((xla_ordinal, call_id, *ip, *op))
+                    capture_key = (xla_ordinal, call_id, *ip, *op)
                     capture = self.captures.get(capture_key)
 
                     # launch existing graph
