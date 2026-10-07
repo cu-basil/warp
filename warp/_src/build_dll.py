@@ -888,7 +888,9 @@ def build_dll_for_arch(
             else:
                 version = ""
 
-        cpp_flags = f'-Werror -Wuninitialized {version} --std=c++17 -fno-rtti -D{cuda_enabled} -D{mathdx_enabled} -D{cuda_compat_enabled} -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -D_GLIBCXX_USE_CXX11_ABI=0 -I"{native_dir}" {includes} '
+        _is_clang_lib = "warp-clang" in os.path.basename(dll_path)
+        _cxx11_abi = os.environ.get("WARP_GLIBCXX_USE_CXX11_ABI", "0") if _is_clang_lib else "0"
+        cpp_flags = f'-Werror -Wuninitialized {version} --std=c++17 -fno-rtti -D{cuda_enabled} -D{mathdx_enabled} -D{cuda_compat_enabled} -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -D_GLIBCXX_USE_CXX11_ABI={_cxx11_abi} -I"{native_dir}" {includes} '
         if hip_enabled:
             cpp_flags += " -D__HIP_PLATFORM_AMD__ "
 

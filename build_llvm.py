@@ -484,7 +484,12 @@ def build_warp_clang_for_arch(args, lib_name: str, arch: str) -> None:
             libs.append("ntdll.lib")
             libs.append(f'/LIBPATH:"{libpath}"')
         else:
-            libs = [f"-l{lib[3:-2]}" for lib in libs if os.path.splitext(lib)[1] == ".a"]
+            _skip_libs = {"libc++abi.a"}
+            libs = [
+                f"-l{lib[3:-2]}"
+                for lib in libs
+                if os.path.splitext(lib)[1] == ".a" and lib not in _skip_libs
+            ]
             if sys.platform == "darwin":
                 libs += libs  # prevents unresolved symbols due to link order
                 exported_symbols_file = os.path.join(build_path, "native", "warp-clang.macos.exports")
@@ -496,6 +501,8 @@ def build_warp_clang_for_arch(args, lib_name: str, arch: str) -> None:
             libs.append("-ldl")
             if sys.platform != "darwin":
                 libs.append("-lrt")
+                libs.append("-lzstd")
+                libs.append("-lz")
 
         build_dll_for_arch(
             args,

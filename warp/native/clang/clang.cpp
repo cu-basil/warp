@@ -759,7 +759,9 @@ static llvm::orc::LLJIT* get_or_create_jit(bool use_legacy_linker)
 
     if (use_legacy_linker) {
         builder.setObjectLinkingLayerCreator(
-#if LLVM_VERSION_MAJOR >= 21
+#if LLVM_VERSION_MAJOR >= 23
+            [](llvm::orc::ExecutionSession& session, llvm::jitlink::JITLinkMemoryManager& memMgr)
+#elif LLVM_VERSION_MAJOR >= 21
             [](llvm::orc::ExecutionSession& session)
 #else
             [](llvm::orc::ExecutionSession& session, const llvm::Triple& triple)
@@ -794,13 +796,19 @@ static llvm::orc::LLJIT* get_or_create_jit(bool use_legacy_linker)
         );
     } else {
         builder.setObjectLinkingLayerCreator(
-#if LLVM_VERSION_MAJOR >= 21
+#if LLVM_VERSION_MAJOR >= 23
+            [](llvm::orc::ExecutionSession& session, llvm::jitlink::JITLinkMemoryManager& memMgr)
+#elif LLVM_VERSION_MAJOR >= 21
             [](llvm::orc::ExecutionSession& session)
 #else
             [](llvm::orc::ExecutionSession& session, const llvm::Triple& triple)
 #endif
                 -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer>> {
+#if LLVM_VERSION_MAJOR >= 23
+                auto layer = std::make_unique<llvm::orc::ObjectLinkingLayer>(session, memMgr);
+#else
                 auto layer = std::make_unique<llvm::orc::ObjectLinkingLayer>(session);
+#endif
 
                 // Register debug-object plugin for GDB/LLDB JIT debugging support.
                 if (WP_ENABLE_DEBUG) {
