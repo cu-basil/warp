@@ -7,6 +7,7 @@ import collections
 import ctypes
 import inspect
 import operator
+import os
 import threading
 import traceback
 from collections.abc import Callable
@@ -79,6 +80,143 @@ def _is_rocm():
         return any(d.is_hip for d in wp.get_cuda_devices())
     except Exception:
         return False
+
+
+_CLAIM_HONOUR_LOG = []
+_DEVICE_CLAIM_LOG: list[dict] = []
+
+
+def _serialize_claim(claim):
+    carried = {}
+    if not claim:
+        return carried
+    if "claim_device" in claim and "claim_version" not in claim:
+        carried["claim_device"] = int(claim["claim_device"])
+        return carried
+    version = claim.get("claim_version")
+    if version is None:
+        raise ValueError("placement claim requires an integer claim_version")
+    carried["claim_version"] = int(version)
+    if "claim_device" in claim:
+        carried["claim_device"] = int(claim["claim_device"])
+    if "allowed_platforms" in claim:
+        value = claim["allowed_platforms"]
+        if isinstance(value, str):
+            carried["allowed_platforms"] = value
+        else:
+            carried["allowed_platforms"] = ",".join(str(p) for p in value)
+    if "allowed_devices" in claim:
+        value = claim["allowed_devices"]
+        if isinstance(value, int):
+            carried["allowed_devices"] = int(value)
+        elif isinstance(value, str):
+            carried["allowed_devices"] = value
+        else:
+            carried["allowed_devices"] = ",".join(str(int(d)) for d in value)
+    if "device_policy" in claim:
+        carried["device_policy"] = str(claim["device_policy"])
+    return carried
+
+
+def _carried_claim(attrs):
+    return {k: v for k, v in attrs.items() if k != "call_id"}
+
+
+def _parse_claim_platforms(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip() != ""]
+        if not parts:
+            raise ValueError(f"malformed claim value '{value}'")
+        return parts
+    try:
+        return [str(value)]
+    except Exception:
+        pass
+    try:
+        return [str(v) for v in value]
+    except Exception as e:
+        raise ValueError(f"malformed claim value '{value}'") from e
+
+
+def _parse_claim_devices(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip() != ""]
+        if not parts:
+            raise ValueError(f"malformed claim value '{value}'")
+        for p in parts:
+            if not p.lstrip("-").isdigit():
+                raise ValueError(f"malformed claim value '{value}'")
+        return [int(p) for p in parts]
+    try:
+        return [int(value)]
+    except (TypeError, ValueError):
+        pass
+    try:
+        return [int(v) for v in value]
+    except Exception as e:
+        raise ValueError(f"malformed claim value '{value}'") from e
+
+
+def _claim_check(carried, platform):
+    if not carried:
+        return None
+    if carried.get("claim_device") is not None and "claim_version" not in carried:
+        return None
+    version = carried.get("claim_version")
+    if version is None:
+        return "placement claim carried without claim_version"
+    try:
+        if int(version) != 1:
+            return f"unsupported claim_version {version}"
+    except Exception:
+        return f"malformed claim_version {version}"
+    try:
+        allowed_platforms = _parse_claim_platforms(carried.get("allowed_platforms"))
+    except ValueError as e:
+        return str(e)
+    if allowed_platforms is not None and platform not in allowed_platforms:
+        return f"placement claim violated: platform '{platform}' not in {allowed_platforms}"
+    return None
+
+
+def _claim_launch_device(carried, platform, xla_ordinal):
+    violation = _claim_check(carried, platform)
+    if violation is not None:
+        return None, violation
+    if not carried:
+        return xla_ordinal, None
+    legacy = carried.get("claim_device")
+    if legacy is not None:
+        if xla_ordinal is None:
+            return None, f"placement claim device {int(legacy)} is not supported on CPU platform"
+        return int(legacy), None
+    policy = carried.get("device_policy", "require")
+    if not isinstance(policy, str):
+        return None, f"malformed device_policy {policy}"
+    if policy == "any":
+        return xla_ordinal, None
+    if policy != "require":
+        return None, f"unsupported device_policy '{policy}'"
+    try:
+        devices = _parse_claim_devices(carried.get("allowed_devices"))
+    except ValueError as e:
+        return None, str(e)
+    if devices is None:
+        return xla_ordinal, None
+    if xla_ordinal is None:
+        return None, f"placement claim devices {devices} are not supported on CPU platform"
+    if xla_ordinal in devices:
+        return xla_ordinal, None
+    if len(devices) == 1:
+        return devices[0], None
+    return (
+        None,
+        f"placement claim violated: XLA ordinal {xla_ordinal} not in claim {devices} and the claim names {len(devices)} devices",
+    )
 
 
 def _register_gpu_ffi_target(jax, name, capsule):
@@ -678,6 +816,7 @@ class FfiCallable:
         graph_cache_max,
         module_preload_mode,
         has_side_effect=False,
+        claim=None,
     ):
         self.func = func
         self.name = generate_unique_name(func)
@@ -687,6 +826,10 @@ class FfiCallable:
         self.output_dims = output_dims
         self.module_preload_mode = module_preload_mode
         self.has_side_effect = has_side_effect
+        self.claim_source = dict(claim) if claim else {}
+        self.claim = self.claim_source
+        self.carried_claim = _serialize_claim(self.claim_source)
+        self._honour_streams = {}
         self.first_array_arg = None
         self.call_id = 0
         self.call_descriptors = {}
@@ -866,7 +1009,7 @@ class FfiCallable:
         call_id = self.call_id
         self.call_descriptors[call_id] = FfiCallDesc(static_inputs)
         self.call_id += 1
-        return call(*args, call_id=call_id)
+        return call(*args, call_id=call_id, **self.carried_claim)
 
     def _build_arg_list(self, inputs, outputs, call_desc, device):
         arg_list = []
@@ -909,12 +1052,8 @@ class FfiCallable:
             # from multiple threads, like with pmap.
             with _FFI_CALLBACK_LOCK:
                 # retrieve call info
-                # NOTE: this assumes that there's only one attribute - call_id (int64).
-                # A more general but slower approach is this:
-                #   attrs = decode_attrs(call_frame.contents.attrs)
-                #   call_id = int(attrs["call_id"])
-                attr = ctypes.cast(call_frame.contents.attrs.attrs[0], ctypes.POINTER(XLA_FFI_Scalar)).contents
-                call_id = ctypes.cast(attr.value, ctypes.POINTER(ctypes.c_int64)).contents.value
+                attrs = decode_attrs(call_frame.contents.attrs)
+                call_id = int(attrs["call_id"])
                 call_desc = self.call_descriptors[call_id]
 
                 num_inputs = call_frame.contents.args.size
@@ -940,6 +1079,10 @@ class FfiCallable:
                             "This Warp build does not include CPU support",
                         )
                     device = wp.get_device("cpu")
+                    carried = _carried_claim(attrs)
+                    _cpu_launch, violation = _claim_launch_device(carried, platform, None)
+                    if violation is not None:
+                        return create_invalid_argument_ffi_error(call_frame.contents.api, violation)
                     module = wp.get_module(self.func.__module__)
                     _load_ffi_module(module, device)
                     arg_list = self._build_arg_list(inputs, outputs, call_desc, device)
@@ -963,14 +1106,203 @@ class FfiCallable:
                     )
 
                 cuda_stream = get_stream_from_callframe(call_frame.contents)
-                device_ordinal = get_device_ordinal_from_callframe(call_frame.contents)
-                device = wp.get_cuda_device(device_ordinal)
+                xla_ordinal = get_device_ordinal_from_callframe(call_frame.contents)
+                carried = _carried_claim(attrs)
+                launch_ordinal, violation = _claim_launch_device(carried, platform, xla_ordinal)
+                if violation is not None:
+                    return create_invalid_argument_ffi_error(call_frame.contents.api, violation)
+                device = wp.get_cuda_device(xla_ordinal)
+                peer_state = None
+                if launch_ordinal is not None and launch_ordinal != xla_ordinal and os.environ.get("DEVCLAIM_NO_OVERRIDE") == "1":
+                    _DEVICE_CLAIM_LOG.append(
+                        {
+                            "call_id": call_id,
+                            "xla_ordinal": xla_ordinal,
+                            "claimed_ordinal": int(launch_ordinal),
+                            "executed_ordinal": xla_ordinal,
+                            "skipped": True,
+                        }
+                    )
+                    launch_ordinal = xla_ordinal
+                if launch_ordinal != xla_ordinal and os.environ.get("WARP_CLAIM_RELOCATION", "peer") == "stage":
+                    if self.graph_mode != JaxCallableGraphMode.NONE:
+                        return create_invalid_argument_ffi_error(
+                            call_frame.contents.api,
+                            f"placement claim device {launch_ordinal} requires JaxCallableGraphMode.NONE, got {self.graph_mode.name}",
+                        )
+                    try:
+                        exec_device = wp.get_cuda_device(launch_ordinal)
+                    except Exception:
+                        return create_invalid_argument_ffi_error(
+                            call_frame.contents.api,
+                            f"placement claim device {launch_ordinal} is not an available CUDA device",
+                        )
+                    overrode_xla = exec_device.ordinal != xla_ordinal
+                    exec_access_xla = None
+                    exec_mempool_access_xla = None
+                    xla_access_exec = None
+                    xla_mempool_access_exec = None
+                    xla_access_exec_before = None
+                    xla_mempool_access_exec_before = None
+                    if overrode_xla:
+                        xla_access_exec_before = wp.is_peer_access_enabled(exec_device, device)
+                        xla_mempool_access_exec_before = wp.is_mempool_access_enabled(exec_device, device)
+                        if wp.is_peer_access_supported(device, exec_device) and not wp.is_peer_access_enabled(
+                            device, exec_device
+                        ):
+                            wp.set_peer_access_enabled(device, exec_device, True)
+                        if wp.is_mempool_access_supported(device, exec_device) and not wp.is_mempool_access_enabled(
+                            device, exec_device
+                        ):
+                            wp.set_mempool_access_enabled(device, exec_device, True)
+                        exec_access_xla = wp.is_peer_access_enabled(device, exec_device)
+                        exec_mempool_access_xla = wp.is_mempool_access_enabled(device, exec_device)
+                        if not exec_access_xla or not exec_mempool_access_xla:
+                            return create_ffi_error(
+                                call_frame.contents.api,
+                                XLA_FFI_Error_Code.FAILED_PRECONDITION,
+                                f"peer access from device {exec_device.ordinal} to device {xla_ordinal} is not available",
+                            )
+                        if wp.is_peer_access_enabled(exec_device, device):
+                            if wp.is_peer_access_supported(exec_device, device):
+                                wp.set_peer_access_enabled(exec_device, device, False)
+                        xla_access_exec = wp.is_peer_access_enabled(exec_device, device)
+                        if wp.is_mempool_access_enabled(exec_device, device):
+                            if wp.is_mempool_access_supported(exec_device, device):
+                                wp.set_mempool_access_enabled(exec_device, device, False)
+                        xla_mempool_access_exec = wp.is_mempool_access_enabled(exec_device, device)
+                    wp.synchronize_device(device)
+                    _load_ffi_module(wp.get_module(self.func.__module__), exec_device)
+                    stage_pairs = []
+                    ptr_map = {}
+                    _pinned = os.environ.get("STAGE_PINNED", "0") == "1"
+
+                    def _claim_stage(buffer, arg):
+                        shape = collapse_batch_dims(buffer.dims[: buffer.rank - arg.dtype_ndim], arg.type.ndim)
+                        if not buffer.data:
+                            return wp.empty(shape, dtype=arg.type.dtype, device=exec_device)
+                        src = wp.array(ptr=buffer.data, dtype=arg.type.dtype, shape=shape, device=device)
+                        key = (int(buffer.data), str(arg.type.dtype))
+                        if key not in ptr_map:
+                            host = wp.empty(shape, dtype=arg.type.dtype, device="cpu", pinned=_pinned)
+                            wp.copy(host, src)
+                            dst = wp.empty(shape, dtype=arg.type.dtype, device=exec_device)
+                            wp.copy(dst, host)
+                            ptr_map[key] = (dst, src, host)
+                            stage_pairs.append((dst, src, host))
+                        return ptr_map[key][0]
+
+                    claim_args = []
+                    for i, arg in enumerate(self.input_args):
+                        if arg.is_array:
+                            claim_args.append(_claim_stage(inputs[i].contents, arg))
+                        else:
+                            claim_args.append(call_desc.static_inputs[arg.name])
+                    for i, arg in enumerate(self.output_args):
+                        claim_args.append(_claim_stage(outputs[i + self.num_in_out].contents, arg))
+                    with wp.ScopedDevice(exec_device):
+                        self.func(*claim_args)
+                    wp.synchronize_device(exec_device)
+                    for dst, src, host in stage_pairs:
+                        wp.copy(host, dst)
+                        wp.copy(src, host)
+                    wp.synchronize_device(device)
+                    _DEVICE_CLAIM_LOG.append(
+                        {
+                            "call_id": call_id,
+                            "xla_ordinal": xla_ordinal,
+                            "claimed_ordinal": launch_ordinal,
+                            "executed_ordinal": exec_device.ordinal,
+                            "overrode_xla": overrode_xla,
+                            "exec_access_xla": exec_access_xla,
+                            "exec_mempool_access_xla": exec_mempool_access_xla,
+                            "xla_access_exec": xla_access_exec,
+                            "xla_mempool_access_exec": xla_mempool_access_exec,
+                            "xla_access_exec_before": xla_access_exec_before,
+                            "xla_mempool_access_exec_before": xla_mempool_access_exec_before,
+                            "graph_mode": self.graph_mode.name,
+                            "platform": platform,
+                        }
+                    )
+                    _CLAIM_HONOUR_LOG.append(
+                        {
+                            "xla_ordinal": xla_ordinal,
+                            "launch_ordinal": launch_ordinal,
+                            "platform": platform,
+                            "carried": {k: str(v) for k, v in carried.items()},
+                            "peer_state": None,
+                        }
+                    )
+                    return None
+                if launch_ordinal != xla_ordinal:
+                    if self.graph_mode != JaxCallableGraphMode.NONE:
+                        return create_invalid_argument_ffi_error(
+                            call_frame.contents.api,
+                            f"placement claim names device {launch_ordinal} but graph_mode {self.graph_mode.name} does not support device relocation",
+                        )
+                    if launch_ordinal >= len(wp.get_cuda_devices()):
+                        return create_invalid_argument_ffi_error(
+                            call_frame.contents.api,
+                            f"placement claim names device {launch_ordinal}, which does not exist",
+                        )
+                    device = wp.get_cuda_device(launch_ordinal)
+                    xla_device = wp.get_cuda_device(xla_ordinal)
+                    peer_before = (
+                        wp.is_peer_access_enabled(xla_device, device),
+                        wp.is_mempool_access_enabled(xla_device, device),
+                    )
+                    if not peer_before[0] and not peer_before[1]:
+                        try:
+                            wp.set_peer_access_enabled(xla_device, device, True)
+                        except Exception as e:
+                            return create_ffi_error(
+                                call_frame.contents.api,
+                                XLA_FFI_Error_Code.FAILED_PRECONDITION,
+                                f"placement claim names device {launch_ordinal} but enabling peer access failed: {type(e).__name__}: {e}",
+                            )
+                    peer_mid = (
+                        wp.is_peer_access_enabled(xla_device, device),
+                        wp.is_mempool_access_enabled(xla_device, device),
+                    )
+                    if not peer_mid[0] and not peer_mid[1]:
+                        try:
+                            wp.set_mempool_access_enabled(xla_device, device, True)
+                        except Exception:
+                            pass
+                    peer_state = {
+                        "peer_before": peer_before[0],
+                        "mempool_before": peer_before[1],
+                        "peer_after": wp.is_peer_access_enabled(xla_device, device),
+                        "mempool_after": wp.is_mempool_access_enabled(xla_device, device),
+                    }
+                    if not peer_state["peer_after"] and not peer_state["mempool_after"]:
+                        return create_ffi_error(
+                            call_frame.contents.api,
+                            XLA_FFI_Error_Code.FAILED_PRECONDITION,
+                            f"placement claim names device {launch_ordinal} but peer access from it to XLA device {xla_ordinal} is not available",
+                        )
+                    honour_key = (xla_ordinal, launch_ordinal, cuda_stream)
+                    if honour_key not in self._honour_streams:
+                        self._honour_streams[honour_key] = {
+                            "stream": wp.Stream(device),
+                            "xla_wrap": wp.Stream(xla_device, cuda_stream=cuda_stream),
+                        }
+                    wp.synchronize_stream(self._honour_streams[honour_key]["xla_wrap"])
+                _CLAIM_HONOUR_LOG.append(
+                    {
+                        "xla_ordinal": xla_ordinal,
+                        "launch_ordinal": launch_ordinal,
+                        "platform": platform,
+                        "carried": {k: str(v) for k, v in carried.items()},
+                        "peer_state": peer_state if launch_ordinal != xla_ordinal else None,
+                    }
+                )
 
                 if self.graph_mode == JaxCallableGraphMode.WARP:
                     # check if we already captured an identical call
                     ip = [inputs[i].contents.data for i in self.array_input_indices]
                     op = [outputs[i].contents.data for i in self.array_output_indices]
-                    capture_key = hash((device_ordinal, call_id, *ip, *op))
+                    capture_key = hash((xla_ordinal, call_id, *ip, *op))
                     capture = self.captures.get(capture_key)
 
                     # launch existing graph
@@ -1069,7 +1401,10 @@ class FfiCallable:
                         return
 
                 _load_ffi_module(wp.get_module(self.func.__module__), device)
-                stream = wp.Stream(device, cuda_stream=cuda_stream)
+                if launch_ordinal != xla_ordinal:
+                    stream = self._honour_streams[(xla_ordinal, launch_ordinal, cuda_stream)]["stream"]
+                else:
+                    stream = wp.Stream(device, cuda_stream=cuda_stream)
 
                 arg_list = self._build_arg_list(inputs, outputs, call_desc, device)
 
@@ -1219,6 +1554,8 @@ class FfiCallable:
                     else:
                         # not capturing
                         self.func(*arg_list)
+                        if launch_ordinal != xla_ordinal:
+                            wp.synchronize_stream(stream)
 
         except Exception as e:
             print(traceback.format_exc())
@@ -1760,6 +2097,7 @@ def jax_callable(
     graph_cache_max: int | None = JAX_CALLABLE_DEFAULT_GRAPH_CACHE_MAX,
     module_preload_mode: JaxModulePreloadMode = JaxModulePreloadMode.CURRENT_DEVICE,
     has_side_effect: bool = False,
+    claim: dict | None = None,
 ):
     """Create a JAX callback from an annotated Python function.
 
@@ -1848,6 +2186,7 @@ def jax_callable(
     hashable_in_out_argnames = tuple(in_out_argnames) if in_out_argnames else None
     hashable_stage_in_argnames = tuple(stage_in_argnames) if stage_in_argnames else None
     hashable_stage_out_argnames = tuple(stage_out_argnames) if stage_out_argnames else None
+    hashable_claim = tuple(sorted((k, str(v)) for k, v in _serialize_claim(claim).items())) if claim else None
 
     # Note: we don't include graph_cache_max in the key, it is applied below.
     key = (
@@ -1861,6 +2200,7 @@ def jax_callable(
         hashable_stage_out_argnames,
         module_preload_mode,
         has_side_effect,
+        hashable_claim,
     )
 
     with _FFI_REGISTRY_LOCK:
@@ -1878,6 +2218,7 @@ def jax_callable(
                 graph_cache_max,
                 module_preload_mode,
                 has_side_effect,
+                claim,
             )
             _FFI_CALLABLE_REGISTRY[key] = callable
         else:
