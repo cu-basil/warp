@@ -1990,7 +1990,22 @@ class Adjoint:
                         return dedented, fast_lineno, tree
         source, fun_lineno = Adjoint._inspect_extract_function_source(func)
         dedented = textwrap.dedent(source)
-        return dedented, fun_lineno, ast.parse(dedented)
+        try:
+            tree = ast.parse(dedented)
+        except SyntaxError:
+            tree = None
+        if code is not None and not (
+            tree is not None
+            and tree.body
+            and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+            and tree.body[0].name == code.co_name
+        ):
+            recovered = Adjoint._recover_function_source(code)
+            if recovered is not None:
+                return recovered
+        if tree is None:
+            tree = ast.parse(dedented)
+        return dedented, fun_lineno, tree
 
     @staticmethod
     def _inspect_extract_function_source(func: Callable) -> tuple[str, int]:
@@ -2047,6 +2062,73 @@ class Adjoint:
             end -= 1
 
         return "".join(lines[start:end]), code.co_firstlineno
+
+    @staticmethod
+    def _iter_qualified_function_defs(node, prefix=""):
+        """Yield ``(FunctionDef, qualified_name)`` for every definition in ``node``."""
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualname = f"{prefix}.{child.name}" if prefix else child.name
+                yield child, qualname
+                yield from Adjoint._iter_qualified_function_defs(child, f"{qualname}.<locals>")
+            elif isinstance(child, ast.ClassDef):
+                qualname = f"{prefix}.{child.name}" if prefix else child.name
+                yield from Adjoint._iter_qualified_function_defs(child, qualname)
+            else:
+                yield from Adjoint._iter_qualified_function_defs(child, prefix)
+
+    @staticmethod
+    def _recover_function_source(code: types.CodeType) -> tuple[str, int, ast.Module] | None:
+        """Re-extract a definition by name from the current file.
+
+        Used when the line-number based slice starts with the wrong function,
+        which happens when the source file was rewritten after ``code`` was
+        compiled. Prefers a ``co_qualname`` match, then the definition closest
+        to ``co_firstlineno``. Returns ``None`` when no matching definition is
+        found, leaving the original (unvalidated) result in place.
+        """
+        try:
+            source = "".join(linecache.getlines(code.co_filename))
+        except Exception:
+            return None
+        if not source:
+            return None
+        try:
+            module = ast.parse(source)
+        except SyntaxError:
+            return None
+        qualname = getattr(code, "co_qualname", None)
+        exact = None
+        nearest = None
+        nearest_dist = None
+        for node, node_qualname in Adjoint._iter_qualified_function_defs(module):
+            if node.name != code.co_name:
+                continue
+            if qualname is not None and node_qualname == qualname:
+                exact = node
+                break
+            dist = abs(node.lineno - code.co_firstlineno)
+            if nearest is None or dist < nearest_dist:
+                nearest = node
+                nearest_dist = dist
+        best = exact if exact is not None else nearest
+        if best is None:
+            return None
+        lines = source.splitlines(keepends=True)
+        start = min([best.lineno] + [d.lineno for d in getattr(best, "decorator_list", [])])
+        segment = "".join(lines[start - 1:best.end_lineno])
+        dedented = textwrap.dedent(segment)
+        try:
+            tree = ast.parse(dedented)
+        except SyntaxError:
+            return None
+        if not (
+            tree.body
+            and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+            and tree.body[0].name == code.co_name
+        ):
+            return None
+        return dedented, start, tree
 
     # generate function ssa form and adjoint
     @synchronized(_codegen_lock)
