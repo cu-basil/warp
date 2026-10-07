@@ -244,6 +244,9 @@ bool get_capture_dependencies(CUstream stream, std::vector<CUgraphNode>& depende
 // nodes and the leaf-node queries they depend on. Always true off HIP.
 bool wp_hip_graph_free_nodes_enabled();
 bool wp_hip_stable_capture_allocs_enabled();
+// True when the graph carries at least one MemFree node, i.e. at least one
+// capture-time allocation was released before the capture ended.
+bool graph_has_mem_free_nodes(cudaGraph_t graph);
 // Ungated variant for pause/resume, which must work regardless of the
 // free-node opt-in; the gated get_graph_leaf_nodes below keeps every
 // free-node consumer reverting together.

@@ -487,18 +487,36 @@ bool get_capture_dependencies(CUstream stream, std::vector<CUgraphNode>& depende
 #endif  // defined(__HIP_PLATFORM_AMD__)
 }
 
+bool graph_has_mem_free_nodes(cudaGraph_t graph)
+{
+    if (!graph)
+        return false;
+    size_t node_count = 0;
+    if (!check_cuda(cudaGraphGetNodes(graph, NULL, &node_count)) || node_count == 0)
+        return false;
+    std::vector<cudaGraphNode_t> nodes(node_count);
+    if (!check_cuda(cudaGraphGetNodes(graph, nodes.data(), &node_count)))
+        return false;
+    for (size_t i = 0; i < node_count; i++) {
+        CUgraphNodeType node_type;
+        if (check_cu(cuGraphNodeGetType_f(nodes[i], &node_type)) && node_type == CU_GRAPH_NODE_TYPE_MEM_FREE)
+            return true;
+    }
+    return false;
+}
+
 bool wp_hip_graph_free_nodes_enabled()
 {
 #if defined(__HIP_PLATFORM_AMD__)
     // ROCm faults when AutoFreeOnLaunch and explicit MemFreeNodes both reclaim
-    // the same graph allocation, and graphs whose capture allocations outlive
-    // the capture cannot be relaunched without one of them. Neither
-    // configuration is correct for every graph, so the free-node machinery is
-    // opt-in and off by default. See KNOWN_ISSUES-AMD.md.
+    // the same graph allocation. The free-node machinery is therefore on by
+    // default while instantiation drops AutoFreeOnLaunch, and
+    // wp_hip_graph_instantiate_worker falls back to AutoFreeOnLaunch only for a
+    // graph that has no MemFree node at all. See KNOWN_ISSUES-AMD.md.
     static int enabled = -1;
     if (enabled == -1) {
         const char* e = getenv("WARP_HIP_GRAPH_FREE_NODES");
-        enabled = (e && e[0] == '1') ? 1 : 0;
+        enabled = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
     }
     return enabled == 1;
 #else
@@ -511,22 +529,21 @@ bool wp_hip_stable_capture_allocs_enabled()
 #if defined(__HIP_PLATFORM_AMD__)
     // Allocations made during graph capture pause the capture and use the plain
     // allocator, so the captured graph carries no MEM_ALLOC nodes and replays
-    // touch stable addresses.
+    // touch stable addresses. Each such buffer is private to its graph and
+    // lives for the graph's lifetime, which is why this path is now opt-in.
     //
-    // On by default: HIP capture-time async allocations become graph MEM_ALLOC
-    // nodes that ROCm does not rematerialize correctly on replay. On a
-    // non-primary device (cuda:1+) this is a deterministic replay fault -- e.g.
-    // capturing a padded bsr_set_transpose (CUB sort scratch allocated during
-    // capture) and relaunching it faults with an illegal memory access, while
-    // the same capture on cuda:0 succeeds. Routing capture-time allocations
-    // through the plain allocator avoids the alloc nodes entirely and makes
-    // multi-GPU captures relaunchable. The trade-off is that such buffers live
-    // for the graph's lifetime. Opt out with WARP_HIP_STABLE_CAPTURE_ALLOCS=0.
-    // See KNOWN_ISSUES-AMD.md, graph memory-allocation nodes.
+    // Off by default: routing capture-time allocations through HIP's pool
+    // instead makes them graph MEM_ALLOC nodes that the pool aliases across
+    // graphs of the same size and non-overlapping lifetime, which is what keeps
+    // captured workloads under the card's capacity. The pool path relies on
+    // the free-node machinery (on by default) to avoid the allocation-node
+    // replay fault. Re-enable this path for a graph whose capture allocations
+    // outlive the capture with WARP_HIP_STABLE_CAPTURE_ALLOCS=1. See
+    // KNOWN_ISSUES-AMD.md, graph memory-allocation nodes.
     static int enabled = -1;
     if (enabled == -1) {
         const char* e = getenv("WARP_HIP_STABLE_CAPTURE_ALLOCS");
-        enabled = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+        enabled = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
     }
     return enabled == 1;
 #else

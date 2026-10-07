@@ -4227,11 +4227,15 @@ static void* wp_hip_graph_instantiate_worker(void* p)
 {
     auto* a = static_cast<WpHipGraphInstantiateArgs*>(p);
     ContextGuard guard(a->context);
-    // Freeing on the capturing stream records a free in the graph, so the graph
-    // already reclaims its own allocations; leaving AutoFreeOnLaunch on as well
-    // reclaims them twice and crashes inside hipGraphLaunch.
-    const unsigned int flags
-        = wp_hip_graph_free_nodes_enabled() ? 0u : (unsigned int)cudaGraphInstantiateFlagAutoFreeOnLaunch;
+    // Freeing on the capturing stream records a free in the graph, so a graph
+    // that has a MemFree node reclaims its own allocations and AutoFreeOnLaunch
+    // must stay off (it would reclaim them twice and crash inside
+    // hipGraphLaunch). A graph with no MemFree node -- capture allocations that
+    // outlive the capture -- has nothing to reclaim them, so it needs
+    // AutoFreeOnLaunch instead.
+    unsigned int flags = (unsigned int)cudaGraphInstantiateFlagAutoFreeOnLaunch;
+    if (wp_hip_graph_free_nodes_enabled() && graph_has_mem_free_nodes(a->graph))
+        flags = 0u;
     *a->success_out = check_cuda(cudaGraphInstantiateWithFlags(a->exec_out, a->graph, flags));
     // WP_DEBUG_GRAPH_DOT: on instantiate failure, dump the graph topology for triage.
     if (!*a->success_out && getenv("WP_DEBUG_GRAPH_DOT")) {
