@@ -377,8 +377,6 @@ def to_torch(a: warp.array, requires_grad: bool | None = None, framework: str | 
     Returns:
         torch.Tensor: The converted PyTorch tensor.
     """
-    import torch  # noqa: PLC0415
-
     if framework is not None and framework not in ("torch", "warp", "jax"):
         raise ValueError(
             f"to_torch framework claim names '{framework}', which is not one of ('torch', 'warp', 'jax')"
@@ -387,6 +385,7 @@ def to_torch(a: warp.array, requires_grad: bool | None = None, framework: str | 
         raise ValueError(
             "to_torch framework='jax' has no JAX array to block on; issue the JAX block at the call site that owns the JAX source"
         )
+    import torch  # noqa: PLC0415
 
     if requires_grad is None:
         requires_grad = a.requires_grad
