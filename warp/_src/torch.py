@@ -194,6 +194,7 @@ def from_torch(
     sync: bool | None = None,
     return_ctype: bool = False,
     retain_grad: bool = False,
+    framework: str | None = None,
 ) -> warp.array | warp._src.types.array_t:
     """Convert a PyTorch tensor to a Warp array without copying the data.
 
@@ -218,17 +219,35 @@ def from_torch(
           This ensures any pending PyTorch operations on the tensor are complete.
           Set to False if you know the tensor is not being modified by PyTorch.
           Default is None, which syncs only on AMD/HIP platforms where stream semantics require it.
+        framework: Which runtime issues the barrier's host synchronize. ``None`` and
+          ``"torch"`` issue ``torch.cuda.Stream.synchronize`` (the default).
+          ``"warp"`` issues a Warp device synchronize on the tensor's device instead,
+          so the barrier's issuer is stated at the call site rather than implied by the
+          conversion API. ``"jax"`` is rejected here: a Torch tensor carries no JAX
+          array to block on, so the JAX-issued form has to be taken at the site that
+          still owns the JAX source.
 
     Returns:
         The wrapped array or array descriptor.
     """
+    if framework is not None and framework not in ("torch", "warp", "jax"):
+        raise ValueError(
+            f"from_torch framework claim names '{framework}', which is not one of ('torch', 'warp', 'jax')"
+        )
+    if framework == "jax":
+        raise ValueError(
+            "from_torch framework='jax' has no JAX array to block on; issue the JAX block at the call site that owns the source array"
+        )
     # On HIP/AMD, PyTorch and Warp may use different streams, and stream synchronization
     # semantics differ from CUDA. Sync PyTorch's stream to ensure tensor data is ready.
     if sync is None:
         sync = t.is_cuda and warp.device_from_torch(t.device).is_hip
     if sync and t.is_cuda:
-        import torch  # noqa: PLC0415
-        torch.cuda.current_stream(t.device).synchronize()
+        if framework == "warp":
+            warp.synchronize_device(warp.device_from_torch(t.device))
+        else:
+            import torch  # noqa: PLC0415
+            torch.cuda.current_stream(t.device).synchronize()
 
     if dtype is None:
         dtype = dtype_from_torch(t.dtype)
@@ -336,7 +355,7 @@ def from_torch(
         return a
 
 
-def to_torch(a: warp.array, requires_grad: bool | None = None):
+def to_torch(a: warp.array, requires_grad: bool | None = None, framework: str | None = None):
     """Convert a Warp array to a PyTorch tensor without copying the data.
 
     The returned PyTorch tensor aliases the Warp array's storage. Clone the
@@ -348,11 +367,26 @@ def to_torch(a: warp.array, requires_grad: bool | None = None):
         requires_grad: Whether the resulting tensor should convert the array's
           gradient, if it exists, to a grad tensor. Defaults to the array's
           ``requires_grad`` value.
+        framework: Which runtime issues the barrier's host synchronize. ``None``
+          leaves the current implicit device-side stream ordering untouched.
+          ``"torch"`` issues an explicit ``torch.cuda.Stream.synchronize`` on the
+          consumer device after the wrap, and ``"warp"`` issues a Warp device
+          synchronize. ``"jax"`` is rejected: a Warp array carries no JAX array to
+          block on.
 
     Returns:
         torch.Tensor: The converted PyTorch tensor.
     """
     import torch  # noqa: PLC0415
+
+    if framework is not None and framework not in ("torch", "warp", "jax"):
+        raise ValueError(
+            f"to_torch framework claim names '{framework}', which is not one of ('torch', 'warp', 'jax')"
+        )
+    if framework == "jax":
+        raise ValueError(
+            "to_torch framework='jax' has no JAX array to block on; issue the JAX block at the call site that owns the JAX source"
+        )
 
     if requires_grad is None:
         requires_grad = a.requires_grad
@@ -394,6 +428,10 @@ def to_torch(a: warp.array, requires_grad: bool | None = None):
         t.requires_grad = requires_grad
         if requires_grad and a.requires_grad:
             t.grad = torch.as_tensor(a.grad, device=device_to_torch(a.device))
+        if framework == "torch":
+            torch.cuda.current_stream(device_to_torch(a.device)).synchronize()
+        elif framework == "warp":
+            warp.synchronize_device(a.device)
         return t
 
     else:

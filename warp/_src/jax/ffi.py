@@ -84,6 +84,8 @@ def _is_rocm():
 
 _CLAIM_HONOUR_LOG = []
 _DEVICE_CLAIM_LOG: list[dict] = []
+_BARRIER_FRAMEWORK_LOG: list[dict] = []
+_BARRIER_FRAMEWORKS = ("warp", "jax", "torch")
 
 
 def _serialize_claim(claim):
@@ -115,7 +117,60 @@ def _serialize_claim(claim):
             carried["allowed_devices"] = ",".join(str(int(d)) for d in value)
     if "device_policy" in claim:
         carried["device_policy"] = str(claim["device_policy"])
+    if "framework" in claim:
+        carried["framework"] = str(claim["framework"])
+    if "framework_policy" in claim:
+        carried["framework_policy"] = str(claim["framework_policy"])
     return carried
+
+
+def _barrier_framework(carried):
+    value = carried.get("framework")
+    if value is None:
+        return None
+    value = str(value)
+    if value not in _BARRIER_FRAMEWORKS:
+        raise ValueError(
+            "barrier framework claim names '%s', which is not one of %s"
+            % (value, _BARRIER_FRAMEWORKS)
+        )
+    if os.environ.get("BARRIER_FRAMEWORK_IGNORE") == "1":
+        return None
+    return value
+
+
+def _issue_barrier(framework, call_id, device, xla_device, cuda_stream, stream=None, xla_wrap=None):
+    record = {
+        "call_id": call_id,
+        "framework": framework,
+        "primitive": None,
+        "target_device": None,
+        "producer_drained_first": False,
+    }
+    producer = stream if stream is not None else wp.Stream(device, cuda_stream=cuda_stream)
+    if framework == "warp":
+        wp.synchronize_stream(producer)
+        record["primitive"] = "warp.synchronize_stream"
+        record["target_device"] = producer.device.ordinal
+    elif framework == "jax":
+        consumer = xla_wrap if xla_wrap is not None else wp.Stream(xla_device, cuda_stream=cuda_stream)
+        if consumer.device.ordinal != producer.device.ordinal:
+            wp.synchronize_stream(producer)
+            record["producer_drained_first"] = True
+        wp.synchronize_stream(consumer)
+        record["primitive"] = "jax.xla_stream_synchronize"
+        record["target_device"] = consumer.device.ordinal
+    elif framework == "torch":
+        import torch
+
+        if device.ordinal != producer.device.ordinal:
+            wp.synchronize_stream(producer)
+            record["producer_drained_first"] = True
+        torch.cuda.current_stream(device.ordinal).synchronize()
+        record["primitive"] = "torch.cuda.Stream.synchronize"
+        record["target_device"] = device.ordinal
+    _BARRIER_FRAMEWORK_LOG.append(record)
+    return record
 
 
 def _carried_claim(attrs):
@@ -1108,6 +1163,7 @@ class FfiCallable:
                 cuda_stream = get_stream_from_callframe(call_frame.contents)
                 xla_ordinal = get_device_ordinal_from_callframe(call_frame.contents)
                 carried = _carried_claim(attrs)
+                _barrier_framework(carried)
                 launch_ordinal, violation = _claim_launch_device(carried, platform, xla_ordinal)
                 if violation is not None:
                     return create_invalid_argument_ffi_error(call_frame.contents.api, violation)
@@ -1554,8 +1610,28 @@ class FfiCallable:
                     else:
                         # not capturing
                         self.func(*arg_list)
+                        barrier_fw = _barrier_framework(carried)
                         if launch_ordinal != xla_ordinal:
-                            wp.synchronize_stream(stream)
+                            if barrier_fw is None:
+                                wp.synchronize_stream(stream)
+                            else:
+                                _issue_barrier(
+                                    barrier_fw,
+                                    call_id,
+                                    device,
+                                    wp.get_cuda_device(xla_ordinal),
+                                    cuda_stream,
+                                    stream=stream,
+                                )
+                        elif barrier_fw is not None:
+                            _issue_barrier(
+                                barrier_fw,
+                                call_id,
+                                device,
+                                device,
+                                cuda_stream,
+                                stream=stream,
+                            )
 
         except Exception as e:
             print(traceback.format_exc())
