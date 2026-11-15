@@ -509,6 +509,25 @@ template <bool IsBegin> struct ValidatedSegmentOffset {
     }
 };
 
+// hipcub requires both offset iterators to have the same type, so the HIP path
+// uses one functor with a runtime flag instead of the two IsBegin
+// specializations below.
+struct ValidatedSegmentOffsetRT {
+    const int* segment_start_indices;
+    const int* segment_end_indices;
+    int count;
+    bool is_begin;
+
+    __host__ __device__ __forceinline__ int operator()(int segment_index) const
+    {
+        const int start = segment_start_indices[segment_index];
+        const int end = segment_end_indices[segment_index];
+        if (start < 0 || end < start || end > count)
+            return 0;
+        return is_begin ? start : end;
+    }
+};
+
 // CUB accepts iterator-defined offsets. Map each invalid pair to [0, 0) so
 // malformed device-resident metadata cannot address outside the input buffers.
 // This avoids a device-to-host copy or synchronization and remains safe during
@@ -516,12 +535,21 @@ template <bool IsBegin> struct ValidatedSegmentOffset {
 auto make_validated_segment_offsets(int* segment_start_indices, int* segment_end_indices, int count)
 {
     auto segment_indices = thrust::make_counting_iterator(0);
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    auto begin_offsets = thrust::make_transform_iterator(
+        segment_indices, ValidatedSegmentOffsetRT { segment_start_indices, segment_end_indices, count, true }
+    );
+    auto end_offsets = thrust::make_transform_iterator(
+        segment_indices, ValidatedSegmentOffsetRT { segment_start_indices, segment_end_indices, count, false }
+    );
+#else
     auto begin_offsets = thrust::make_transform_iterator(
         segment_indices, ValidatedSegmentOffset<true> { segment_start_indices, segment_end_indices, count }
     );
     auto end_offsets = thrust::make_transform_iterator(
         segment_indices, ValidatedSegmentOffset<false> { segment_start_indices, segment_end_indices, count }
     );
+#endif
     return std::make_pair(begin_offsets, end_offsets);
 }
 

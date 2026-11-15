@@ -29,7 +29,7 @@
 #endif
 #endif  // WP_API
 
-#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+#if !defined(__CUDA_ARCH__)
 
 // Helper for implementing assert() macro
 extern "C" WP_API void _wp_assert(const char* message, const char* file, unsigned int line);
@@ -45,7 +45,6 @@ extern "C" WP_API int _wp_isinf(double);
 
 #endif  // !__CUDA_ARCH__
 
-// NOTE: WP_NO_CRT is never defined for HIP builds.
 #if !defined(WP_NO_CRT)
 
 #include <assert.h>
@@ -355,7 +354,7 @@ inline bool isinf(double x) { return _wp_isinf(x); }
 
 #endif  // WP_NO_CRT
 
-#if !defined(__CUDACC__) && !defined(__HIP_DEVICE_COMPILE__)
+#if !defined(__CUDACC__)
 
 /*
  * From Cephes Library polevl.c
@@ -493,4 +492,4 @@ inline double erfcinv(double x) { return erfinv(1.0 - x); }
 
 inline float erfcinvf(float x) { return (float)erfcinv((double)x); }
 
-#endif  // !defined(__CUDACC__) && !defined(__HIP_DEVICE_COMPILE__)
+#endif  // !defined(__CUDACC__)
