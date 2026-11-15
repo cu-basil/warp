@@ -104,7 +104,7 @@ constexpr inline CUDA_CALLABLE int next_higher_pow2(int input)
 }
 
 
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#if defined(__CUDA_ARCH__)
 
 
 // Bitonic sort fast pass for small arrays
@@ -1011,7 +1011,7 @@ template <typename TileK, typename TileV> CUDA_CALLABLE_DEVICE void tile_sort(Ti
     } else if constexpr (!tile_sort_block_has_whole_warps) {
         bitonic_sort_thread_block_any_dim(WP_TILE_THREAD_IDX, keys, values, num_elements_to_sort);
     } else {
-        WP_SHARED_ARRAY(T, keys_tmp, num_elements_to_sort);
+        __shared__ T keys_tmp[num_elements_to_sort];
         __shared__ V values_tmp[num_elements_to_sort];
 
         constexpr int warp_count = (WP_TILE_BLOCK_DIM + WP_TILE_WARP_SIZE - 1) / WP_TILE_WARP_SIZE;
@@ -1050,7 +1050,7 @@ CUDA_CALLABLE_DEVICE void tile_sort(TileK& t, TileV& t2, int start, int length)
         bitonic_sort_thread_block_any_dim(WP_TILE_THREAD_IDX, keys, values, num_elements_to_sort);
     } else {
         if constexpr (max_elements_to_sort > BITONIC_SORT_THRESHOLD) {
-            WP_SHARED_ARRAY(T, keys_tmp, max_elements_to_sort);
+            __shared__ T keys_tmp[max_elements_to_sort];
             __shared__ V values_tmp[max_elements_to_sort];
 
             constexpr int warp_count = (WP_TILE_BLOCK_DIM + WP_TILE_WARP_SIZE - 1) / WP_TILE_WARP_SIZE;
@@ -1068,7 +1068,7 @@ CUDA_CALLABLE_DEVICE void tile_sort(TileK& t, TileV& t2, int start, int length)
 
 // CPU implementation
 
-template <typename K> CUDA_CALLABLE void swap_elements(K& a, K& b)
+template <typename K> void swap_elements(K& a, K& b)
 {
     K tmp = a;
     a = b;
@@ -1076,7 +1076,7 @@ template <typename K> CUDA_CALLABLE void swap_elements(K& a, K& b)
 }
 
 // length must be a power of two
-template <typename K, typename V> CUDA_CALLABLE void bitonic_sort_pairs_pow2_length_cpu(K* keys, V* values, int length)
+template <typename K, typename V> void bitonic_sort_pairs_pow2_length_cpu(K* keys, V* values, int length)
 {
     for (int k = 2; k <= length; k *= 2) {
         for (int stride = k / 2; stride > 0; stride /= 2) {
@@ -1095,7 +1095,7 @@ template <typename K, typename V> CUDA_CALLABLE void bitonic_sort_pairs_pow2_len
 }
 
 template <typename K, typename V, int max_size, typename KeyToUint>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(K* keys, V* values, int length)
+void bitonic_sort_pairs_general_size_cpu(K* keys, V* values, int length)
 {
     constexpr int pow2_size = next_higher_pow2(max_size);
 
@@ -1135,39 +1135,34 @@ CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(K* keys, V* values, int l
     }
 }
 
-template <typename V, int max_size>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(unsigned int* keys, V* values, int length)
+template <typename V, int max_size> void bitonic_sort_pairs_general_size_cpu(unsigned int* keys, V* values, int length)
 {
     bitonic_sort_pairs_general_size_cpu<unsigned int, V, max_size, UintKeyToUint>(keys, values, length);
 }
 
-template <typename V, int max_size>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(int* keys, V* values, int length)
+template <typename V, int max_size> void bitonic_sort_pairs_general_size_cpu(int* keys, V* values, int length)
 {
     bitonic_sort_pairs_general_size_cpu<int, V, max_size, IntKeyToUint>(keys, values, length);
 }
 
-template <typename V, int max_size>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(float* keys, V* values, int length)
+template <typename V, int max_size> void bitonic_sort_pairs_general_size_cpu(float* keys, V* values, int length)
 {
     bitonic_sort_pairs_general_size_cpu<float, V, max_size, FloatKeyToUint>(keys, values, length);
 }
 
-template <typename V, int max_size>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(int64_t* keys, V* values, int length)
+template <typename V, int max_size> void bitonic_sort_pairs_general_size_cpu(int64_t* keys, V* values, int length)
 {
     bitonic_sort_pairs_general_size_cpu<int64_t, V, max_size, Int64KeyToUint>(keys, values, length);
 }
 
-template <typename V, int max_size>
-CUDA_CALLABLE void bitonic_sort_pairs_general_size_cpu(uint64_t* keys, V* values, int length)
+template <typename V, int max_size> void bitonic_sort_pairs_general_size_cpu(uint64_t* keys, V* values, int length)
 {
     bitonic_sort_pairs_general_size_cpu<uint64_t, V, max_size, Uint64KeyToUint>(keys, values, length);
 }
 
 
 template <typename K, typename V, typename KeyToUint>
-CUDA_CALLABLE void radix_sort_pairs_cpu_core(K* keys, K* aux_keys, V* values, V* aux_values, int n)
+void radix_sort_pairs_cpu_core(K* keys, K* aux_keys, V* values, V* aux_values, int n)
 {
     KeyToUint converter;
     constexpr size_t table_size = sizeof(unsigned int) * 2 * (1 << 16);
@@ -1251,7 +1246,7 @@ radix_sort_pairs_cpu(int* keys_input, int* keys_aux, V* values_input, V* values_
 }
 
 template <typename V>
-CUDA_CALLABLE inline void radix_sort_pairs_cpu(
+inline void radix_sort_pairs_cpu(
     unsigned int* keys_input, unsigned int* keys_aux, V* values_input, V* values_aux, int num_elements_to_sort
 )
 {
@@ -1270,7 +1265,7 @@ radix_sort_pairs_cpu(float* keys_input, float* keys_aux, V* values_input, V* val
 }
 
 
-template <typename TileK, typename TileV> CUDA_CALLABLE void tile_sort(TileK& t, TileV& t2)
+template <typename TileK, typename TileV> void tile_sort(TileK& t, TileV& t2)
 {
     using T = typename TileK::Type;
     using V = typename TileV::Type;
@@ -1312,7 +1307,7 @@ template <typename TileK, typename TileV> CUDA_CALLABLE void tile_sort(TileK& t,
     WP_TILE_SYNC();
 }
 
-template <typename TileK, typename TileV> CUDA_CALLABLE void tile_sort(TileK& t, TileV& t2, int start, int length)
+template <typename TileK, typename TileV> void tile_sort(TileK& t, TileV& t2, int start, int length)
 {
     using T = typename TileK::Type;
     using V = typename TileV::Type;
@@ -1362,8 +1357,7 @@ template <typename TileK, typename TileV> CUDA_CALLABLE void tile_sort(TileK& t,
 #endif  // !defined(__CUDA_ARCH__)
 
 
-template <typename TileK, typename TileV>
-CUDA_CALLABLE inline void adj_tile_sort(TileK& t, TileV& t2, TileK& adj_t1, TileV& adj_t2)
+template <typename TileK, typename TileV> inline void adj_tile_sort(TileK& t, TileV& t2, TileK& adj_t1, TileV& adj_t2)
 {
     // MISSINGADJOINT: track permutation indices in forward pass, apply inverse permutation to
     // adj outputs

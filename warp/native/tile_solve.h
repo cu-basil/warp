@@ -171,7 +171,7 @@ inline CUDA_CALLABLE void scalar_cholesky_solve(TileA& A, TileX& X, TileY& Y)
 
 
 template <typename Fwd, typename Bkwd, typename TileL, typename TileY, typename TileZ>
-CUDA_CALLABLE TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, TileZ& z)
+TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, TileZ& z)
 {
     // Copy y to z
     z = y;
@@ -192,7 +192,7 @@ CUDA_CALLABLE TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, 
 }
 
 template <typename Fwd, typename TileL, typename TileY>
-CUDA_CALLABLE void tile_lower_solve_inplace(Fwd fun_forward, TileL& L, TileY& y)
+void tile_lower_solve_inplace(Fwd fun_forward, TileL& L, TileY& y)
 {
 #if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_forward_substitution<false>(L, y, y);
@@ -224,7 +224,7 @@ template <
     typename AdjTileY,
     typename AdjTileZ,
     typename AdjRet>
-inline CUDA_CALLABLE void adj_tile_lower_solve(
+CUDA_CALLABLE void adj_tile_lower_solve(
     Fwd fun_forward,
     Bkwd fun_bkwd,
     TileL& L,
@@ -320,7 +320,7 @@ inline CUDA_CALLABLE void adj_tile_lower_solve(
 }
 
 template <typename Fwd, typename TileL, typename TileY, typename AdjFwd, typename AdjTileL, typename AdjTileY>
-inline CUDA_CALLABLE void adj_tile_lower_solve_inplace(
+void adj_tile_lower_solve_inplace(
     Fwd fun_forward, TileL& L, TileY& y, AdjFwd adj_fun_forward, AdjTileL& adj_L, AdjTileY& adj_y
 )
 {
@@ -330,7 +330,7 @@ inline CUDA_CALLABLE void adj_tile_lower_solve_inplace(
 
 
 template <typename Fwd, typename TileU, typename TileZ, typename TileX>
-CUDA_CALLABLE TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
+TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
 {
     // Copy z to x
     x = z;
@@ -355,7 +355,7 @@ CUDA_CALLABLE TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX
 }
 
 template <typename Fwd, typename TileU, typename TileZ>
-CUDA_CALLABLE void tile_upper_solve_inplace(Fwd fun_forward, TileU& U, TileZ& z)
+void tile_upper_solve_inplace(Fwd fun_forward, TileU& U, TileZ& z)
 {
 #if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     {
@@ -384,7 +384,7 @@ template <
     typename AdjTileZ,
     typename AdjTileX,
     typename AdjRet>
-inline CUDA_CALLABLE void adj_tile_upper_solve(
+void adj_tile_upper_solve(
     Fwd fun_forward,
     TileU& U,
     TileZ& z,
@@ -401,7 +401,7 @@ inline CUDA_CALLABLE void adj_tile_upper_solve(
 }
 
 template <typename Fwd, typename TileU, typename TileZ, typename AdjFwd, typename AdjTileU, typename AdjTileZ>
-inline CUDA_CALLABLE void adj_tile_upper_solve_inplace(
+void adj_tile_upper_solve_inplace(
     Fwd fun_forward, TileU& U, TileZ& z, AdjFwd adj_fun_forward, AdjTileU& adj_U, AdjTileZ& adj_z
 )
 {
@@ -411,7 +411,7 @@ inline CUDA_CALLABLE void adj_tile_upper_solve_inplace(
 
 
 template <bool Upper, typename Fwd, typename TileA, typename TileY, typename TileX>
-inline CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
+TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
 {
     // Copy y to x
 
@@ -433,7 +433,7 @@ inline CUDA_CALLABLE TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY
 }
 
 template <bool Upper, typename Fwd, typename TileA, typename TileY>
-inline CUDA_CALLABLE void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
+void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
 {
 #if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_solve<Upper>(A, Y, Y);
@@ -459,7 +459,7 @@ template <
     typename AdjTileY,
     typename AdjTileX,
     typename AdjRet>
-inline CUDA_CALLABLE void adj_tile_cholesky_solve(
+void adj_tile_cholesky_solve(
     Fwd fun_forward,
     TileA& A,
     TileY& Y,
@@ -483,7 +483,7 @@ template <
     typename AdjFwd,
     typename AdjTileA,
     typename AdjTileY>
-inline CUDA_CALLABLE void adj_tile_cholesky_solve_inplace(
+void adj_tile_cholesky_solve_inplace(
     Fwd fun_forward, TileA& A, TileY& Y, AdjFwd adj_fun_forward, AdjTileA& adj_A, AdjTileY& adj_Y
 )
 {

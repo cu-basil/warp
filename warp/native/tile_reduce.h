@@ -11,24 +11,21 @@
 #pragma clang diagnostic ignored "-Wc++17-extensions"
 #endif  // __clang__
 
-
 namespace wp {
 
 
-template <typename T>
-CUDA_CALLABLE int argmax_tracker(T champion_value, T current_value, int champion_index, int current_index)
+template <typename T> int argmax_tracker(T champion_value, T current_value, int champion_index, int current_index)
 {
     return current_value > champion_value ? current_index : champion_index;
 }
 
-template <typename T>
-CUDA_CALLABLE int argmin_tracker(T champion_value, T current_value, int champion_index, int current_index)
+template <typename T> int argmin_tracker(T champion_value, T current_value, int champion_index, int current_index)
 {
     return current_value < champion_value ? current_index : champion_index;
 }
 
 
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#if defined(__CUDA_ARCH__)
 
 // half / float16 uses a dedicated overload to shuffle its 16-bit payload directly.
 inline CUDA_CALLABLE half warp_shuffle_down(half val, int offset, wp_tile_lane_mask_bits_t mask)
@@ -370,38 +367,15 @@ template <typename Tile, typename Op> CUDA_CALLABLE_DEVICE auto tile_reduce_impl
         T* partials = reinterpret_cast<T*>(partials_storage);
         __shared__ int active_warps;
 
-        const int warp_index = threadIdx.x / WP_TILE_WARP_SIZE;
-        const int lane_index = threadIdx.x % WP_TILE_WARP_SIZE;
-
-        if (threadIdx.x < warp_count)
-            warp_valid[threadIdx.x] = 0;
+        if (threadIdx.x == 0)
+            active_warps = 0;
 
         WP_TILE_SYNC();
 
-        tile_mask_t mask = __ballot_sync(tile_full_mask, thread_has_data);
-        T warp_sum;
-        if (thread_has_data)
-            warp_sum = warp_reduce(thread_sum, f, mask);
+        block_sum = block_combine_thread_results(thread_sum, thread_has_data, f, partials, active_warps);
 
-        // warp_reduce's result is valid only in the first active lane
-        const int first_active = tile_ffs(mask) - 1;
-        if (mask != 0 && lane_index == first_active) {
-            partials[warp_index] = warp_sum;
-            warp_valid[warp_index] = 1;
-        }
-
-        WP_TILE_SYNC();
-
-        if (threadIdx.x == 0) {
-            bool have_sum = false;
-            for (int w = 0; w < warp_count; ++w) {
-                if (warp_valid[w]) {
-                    block_sum = have_sum ? f(block_sum, partials[w]) : partials[w];
-                    have_sum = true;
-                }
-            }
+        if (threadIdx.x == 0)
             output.data[0] = block_sum;
-        }
     }
 
     return output;
@@ -427,7 +401,6 @@ tile_reduce_axis_impl(Op f, Tile& t, typename Tile::Type empty_identity, bool ha
     // special case: 1D input delegates to block-wide tile_reduce_impl for optimal performance
     if constexpr (InputShape::N == 1) {
         return tile_reduce_impl(f, t);
-
     } else {
 
         // shared memory buffer for the output (used by all tiers)
@@ -709,7 +682,7 @@ CUDA_CALLABLE_DEVICE auto tile_arg_reduce_impl(Op f, OpTrack track, Tile& t)
 
 // CPU implementation
 
-template <typename Tile, typename Op> CUDA_CALLABLE auto tile_reduce_impl(Op f, Tile& t)
+template <typename Tile, typename Op> auto tile_reduce_impl(Op f, Tile& t)
 {
     using T = typename Tile::Type;
 
@@ -921,8 +894,7 @@ auto tile_reduce_axis_impl(Op f, Tile& t, typename Tile::Type empty_identity, bo
     }
 }
 
-template <typename Tile, typename Op, typename OpTrack>
-CUDA_CALLABLE auto tile_arg_reduce_impl(Op f, OpTrack track, Tile& t)
+template <typename Tile, typename Op, typename OpTrack> auto tile_arg_reduce_impl(Op f, OpTrack track, Tile& t)
 {
     using T = typename Tile::Type;
 
@@ -1040,7 +1012,7 @@ void adj_tile_reduce_axis(Op op, Tile& t, int axis, AdjOp& adj_op, AdjTile& adj_
 // convenience methods for specific reductions
 
 // whole-tile sum
-template <typename Tile> CUDA_CALLABLE auto tile_sum(Tile& t) { return tile_reduce(add, t); }
+template <typename Tile> auto tile_sum(Tile& t) { return tile_reduce(add, t); }
 
 // special case adjoint for summation
 template <typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_sum(Tile& t, Tile& adj_t, AdjTile& adj_ret)
@@ -1126,7 +1098,7 @@ template <typename TileA, typename TileB> CUDA_CALLABLE auto tile_dot(TileA& a, 
     }
 
     // Phase 2: cross-thread reduction (same pattern as tile_reduce_impl)
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#if defined(__CUDA_ARCH__)
     constexpr int warp_count = (WP_TILE_BLOCK_DIM + WP_TILE_WARP_SIZE - 1) / WP_TILE_WARP_SIZE;
     auto add_op = [](ScalarT x, ScalarT y) { return x + y; };
 
@@ -1150,35 +1122,14 @@ template <typename TileA, typename TileB> CUDA_CALLABLE auto tile_dot(TileA& a, 
         ScalarT* partials = reinterpret_cast<ScalarT*>(partials_storage);
         __shared__ int active_warps;
 
-        const int warp_index = threadIdx.x / WP_TILE_WARP_SIZE;
-        const int lane_index = threadIdx.x % WP_TILE_WARP_SIZE;
-
-        if (threadIdx.x < warp_count)
-            warp_valid[threadIdx.x] = 0;
+        if (threadIdx.x == 0)
+            active_warps = 0;
         WP_TILE_SYNC();
 
-        tile_mask_t mask = __ballot_sync(tile_full_mask, has_data);
-        ScalarT warp_sum;
-        if (has_data)
-            warp_sum = warp_reduce(thread_sum, add_op, mask);
+        result = block_combine_thread_results(thread_sum, has_data, add_op, partials, active_warps);
 
-        const int first_active = tile_ffs(mask) - 1;
-        if (mask != 0 && lane_index == first_active) {
-            partials[warp_index] = warp_sum;
-            warp_valid[warp_index] = 1;
-        }
-        WP_TILE_SYNC();
-
-        if (threadIdx.x == 0) {
-            bool have_sum = false;
-            for (int w = 0; w < warp_count; ++w) {
-                if (warp_valid[w]) {
-                    result = have_sum ? add_op(result, partials[w]) : partials[w];
-                    have_sum = true;
-                }
-            }
+        if (threadIdx.x == 0)
             output.data[0] = result;
-        }
     }
 #else
     if constexpr (WP_TILE_BLOCK_DIM == 1) {
@@ -1361,24 +1312,24 @@ CUDA_CALLABLE void adj_tile_sum_axis(Tile& t, Tile& adj_t, AdjTile& adj_ret)
     WP_TILE_SYNC();
 }
 
-template <typename Tile> CUDA_CALLABLE auto tile_max(Tile& t) { return tile_reduce(max, t); }
+template <typename Tile> auto tile_max(Tile& t) { return tile_reduce(max, t); }
 
-template <typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_max(Tile& t, Tile& adj_t, AdjTile& adj_ret)
+template <typename Tile, typename AdjTile> void adj_tile_max(Tile& t, Tile& adj_t, AdjTile& adj_ret)
 {
     // MISSINGADJOINT: subgradient: route adj_ret to the index of the maximum element
 }
 
-template <typename Tile> CUDA_CALLABLE auto tile_min(Tile& t) { return tile_reduce(min, t); }
+template <typename Tile> auto tile_min(Tile& t) { return tile_reduce(min, t); }
 
-template <typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_min(Tile& t, Tile& adj_t, AdjTile& adj_ret)
+template <typename Tile, typename AdjTile> void adj_tile_min(Tile& t, Tile& adj_t, AdjTile& adj_ret)
 {
     // MISSINGADJOINT: subgradient: route adj_ret to the index of the minimum element
 }
 
 
-template <typename Tile> CUDA_CALLABLE auto tile_argmax(Tile& t) { return tile_arg_reduce(max, argmax_tracker, t); }
+template <typename Tile> auto tile_argmax(Tile& t) { return tile_arg_reduce(max, argmax_tracker, t); }
 
-template <typename Tile> CUDA_CALLABLE auto tile_argmin(Tile& t) { return tile_arg_reduce(min, argmin_tracker, t); }
+template <typename Tile> auto tile_argmin(Tile& t) { return tile_arg_reduce(min, argmin_tracker, t); }
 
 
 }  // namespace wp
