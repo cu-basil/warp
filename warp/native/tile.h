@@ -62,26 +62,30 @@ using wp_tile_lane_mask_bits_t = decltype(WP_TILE_LANE_MASK_ALL);
 #pragma clang diagnostic ignored "-Wc++17-extensions"
 #endif  // __clang__
 
-// Check if the CUDA toolkit is available
-#if WP_ENABLE_CUDA || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
+// Check if the CUDA/HIP toolkit is available
+#if WP_ENABLE_CUDA || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__HIPCC__)
 
-// NVRTC has built-in float4; Clang CUDA JIT defines it in cuda_crt.h
-#if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
+// NVRTC has built-in float4; Clang CUDA JIT defines it in cuda_crt.h.
+// hipRTC / HIP device compiles also provide float4 via their runtime wrappers,
+// and including runtime headers there causes redefinition errors.
+#if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__HIPCC_RTC__) \
+    || defined(__HIP_DEVICE_COMPILE__)
 // float4 already available
-#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
-// HIP builds set WP_ENABLE_CUDA but have no CUDA toolkit; float4 comes from the
-// ROCm headers pulled in by hip_util.h.
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include "hip_util.h"
 #else
-// NVCC: Include vector_types.h to get float4
 #include <cuda_runtime.h>
 #endif
 
 #else
-// If CUDA is not available (e.g., macOS build), manually define float4
+// If CUDA is not available (e.g., macOS build), manually define float4.
+// Avoid redefining when HIP device compile already provides float4.
+#if !defined(__HIP_DEVICE_COMPILE__)
 struct alignas(16) float4 {
     float x, y, z, w;
 };
-#endif
+#endif  // !__HIP_DEVICE_COMPILE__
+#endif  // WP_ENABLE_CUDA || RTC/clang-CUDA/HIPCC
 
 #if defined(__CUDA_ARCH__)
 #define WP_TILE_SYNC __syncthreads
