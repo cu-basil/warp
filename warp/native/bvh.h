@@ -230,7 +230,6 @@ CUDA_CALLABLE inline void make_node(volatile BVHPackedNodeHalf* n, const vec3& b
     n->b = (unsigned int)(leaf ? 1 : 0);
 }
 
-#if defined(__CUDACC__) || defined(__HIP_DEVICE_COMPILE__)
 CUDA_CALLABLE inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHalf* nodes, int index)
 {
 #if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && defined(USE_LOAD4)
@@ -255,20 +254,24 @@ CUDA_CALLABLE inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNode
 // compiles to a single predicate chain instead of a branch per component;
 // the eager loads stay gated to the AABB instantiations because the extra
 // live registers measurably hurt the heavier sphere/capsule instantiations
-__device__ inline int bvh_load_int(const int* data, int index) { return __ldg(data + index); }
-
-__device__ inline vec3 bvh_load_vec3(const vec3* data, int index)
+CUDA_CALLABLE inline int bvh_load_int(const int* data, int index)
 {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+    return __ldg(data + index);
+#else
+    return data[index];
+#endif
+}
+
+CUDA_CALLABLE inline vec3 bvh_load_vec3(const vec3* data, int index)
+{
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     const float* p = reinterpret_cast<const float*>(data + index);
     return vec3(__ldg(p + 0), __ldg(p + 1), __ldg(p + 2));
-}
 #else
-inline wp::BVHPackedNodeHalf bvh_load_node(const wp::BVHPackedNodeHalf* nodes, int index) { return nodes[index]; }
-
-inline int bvh_load_int(const int* data, int index) { return data[index]; }
-
-inline vec3 bvh_load_vec3(const vec3* data, int index) { return data[index]; }
-#endif  // __CUDACC__
+    return data[index];
+#endif
+}
 
 CUDA_CALLABLE inline int clz(int x)
 {
