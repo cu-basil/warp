@@ -3,6 +3,7 @@
 
 """Tests for graph capture and replay on CPU and CUDA devices."""
 
+import builtins
 import ctypes
 import enum
 import gc
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import time
 import unittest
+import weakref
 
 import numpy as np
 
@@ -93,6 +95,47 @@ class TestGraph(unittest.TestCase):
         self.assertIs(get_current.restype, ctypes.c_uint64)
         self.assertEqual(trim.argtypes, [ctypes.c_int])
         self.assertIsNone(trim.restype)
+
+
+def test_cuda_capture_apic_disabled_does_not_retain_caller(test, device):
+    """Ensure a default CUDA capture does not import APIC from its caller's stack."""
+    # Mimic a host import cache that retains exceptions and their traceback frames.
+    cached_exceptions = []
+    original_import = builtins.__import__
+
+    def cached_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "warp._src.apic.capture":
+            try:
+                raise FileNotFoundError(name)
+            except FileNotFoundError as exc:
+                cached_exceptions.append(exc)
+        return original_import(name, globals, locals, fromlist, level)
+
+    # Use a weak-referenceable sentinel to detect whether the caller frame stays alive.
+    class CallerState:
+        pass
+
+    def capture_with_caller_state():
+        caller_state = CallerState()
+        caller_state_ref = weakref.ref(caller_state)
+        builtins.__import__ = cached_import
+        try:
+            wp.capture_begin(device=device, force_module_load=False, apic=False)
+            graph = wp.capture_end(device=device)
+        finally:
+            builtins.__import__ = original_import
+        return caller_state_ref, graph
+
+    caller_state_ref, graph = capture_with_caller_state()
+    # Drop normal references so only a cached traceback could retain the sentinel.
+    del graph
+    gc.collect()
+
+    test.assertFalse(
+        cached_exceptions,
+        "capture_begin(apic=False) imported warp._src.apic.capture",
+    )
+    test.assertIsNone(caller_state_ref())
 
 
 def test_graph_single_kernel(test, device):
@@ -237,7 +280,7 @@ def test_graph_fill_noncontiguous_cpu_rejected(test, device):
 
 
 def test_graph_fill_indexed_cpu_rejected(test, device):
-    # Indexedarray.fill_() during CPU APIC capture has no recording path yet.
+    """Reject indexed-array fills during CPU APIC capture."""
     if not device.is_cpu:
         test.skipTest("CPU-only: CUDA indexed fill APIC rejection is covered in test_apic")
     arr = wp.zeros(8, dtype=wp.int32, device=device)
@@ -392,7 +435,7 @@ def test_graph_launch_array_access_mode_checked_mempool_access_cuda_capture(test
 
 
 def test_graph_alloc(test, device):
-    """Array allocated inside capture scope, used by subsequent kernel."""
+    """Test array allocated inside capture scope, used by subsequent kernel."""
     n = 128
     input_arr = wp.array(np.arange(n, dtype=np.float32) + 1.0, device=device)
     output_arr = wp.zeros(n, dtype=float, device=device)
@@ -422,7 +465,7 @@ def test_graph_alloc(test, device):
 
 
 def test_cuda_graph_alloc_free_preserves_merged_frontier(test, device):
-    """In-capture free preserves cross-stream dependencies merged via ``wait_stream``."""
+    """Verify that in-capture free preserves cross-stream dependencies merged via ``wait_stream``."""
     n = 1 << 14
     spin = 1 << 24
 
@@ -812,7 +855,7 @@ def test_cuda_graph_topo_alloc_sequential_free(test, device):
 
 
 def test_cuda_graph_topo_alloc_side_stream_independent(test, device):
-    """Alloc on an unjoined side stream is independent from the parent."""
+    """Verify that alloc on an unjoined side stream is independent from the parent."""
 
     # Expected topology:
     #
@@ -838,7 +881,7 @@ def test_cuda_graph_topo_alloc_side_stream_independent(test, device):
 
 
 def test_cuda_graph_topo_alloc_side_stream_independent_free(test, device):
-    """Alloc/free on an unjoined side stream doesn't serialize parent."""
+    """Verify that alloc/free on an unjoined side stream doesn't serialize parent."""
 
     # Expected topology:
     #
@@ -869,7 +912,7 @@ def test_cuda_graph_topo_alloc_side_stream_independent_free(test, device):
 
 
 def test_cuda_graph_topo_alloc_side_stream_joined(test, device):
-    """Joining a side stream exposes its alloc to the parent."""
+    """Verify that joining a side stream exposes its alloc to the parent."""
 
     # Expected topology:
     #
@@ -900,7 +943,7 @@ def test_cuda_graph_topo_alloc_side_stream_joined(test, device):
 
 
 def test_cuda_graph_topo_alloc_fork(test, device):
-    """A forked side stream inherits allocs from before the fork, but not from after the fork."""
+    """Verify that a forked side stream inherits allocs from before the fork, but not from after the fork."""
 
     # Expected topology:
     #
@@ -936,7 +979,7 @@ def test_cuda_graph_topo_alloc_fork(test, device):
 
 
 def test_cuda_graph_topo_alloc_fork_free_on_main(test, device):
-    """Forked allocs freed on main stream without sync."""
+    """Test forked allocs freed on main stream without sync."""
 
     # Expected topology:
     #
@@ -984,7 +1027,7 @@ def test_cuda_graph_topo_alloc_fork_free_on_main(test, device):
 
 
 def test_cuda_graph_topo_alloc_fork_free_on_side(test, device):
-    """Forked allocs freed on side stream without sync."""
+    """Test forked allocs freed on side stream without sync."""
 
     # Expected topology:
     #
@@ -1032,7 +1075,7 @@ def test_cuda_graph_topo_alloc_fork_free_on_side(test, device):
 
 
 def test_cuda_graph_topo_alloc_parallel_streams(test, device):
-    """Parallel side streams' allocs are mutually independent."""
+    """Verify that parallel side streams' allocs are mutually independent."""
 
     # Expected topology:
     #
@@ -1061,7 +1104,7 @@ def test_cuda_graph_topo_alloc_parallel_streams(test, device):
 
 
 def test_cuda_graph_topo_alloc_parallel_streams_free_on_sides(test, device):
-    """Freeing side stream allocs does not serialize independent streams"""
+    """Keep independent streams concurrent when freeing side-stream allocations."""
 
     # Expected topology:
     #
@@ -1096,7 +1139,7 @@ def test_cuda_graph_topo_alloc_parallel_streams_free_on_sides(test, device):
 
 
 def test_cuda_graph_topo_alloc_parallel_streams_free_on_main(test, device):
-    """Freeing side stream allocs does not serialize independent streams"""
+    """Keep independent streams concurrent when freeing allocations on the main stream."""
 
     # Expected topology:
     #
@@ -1131,7 +1174,7 @@ def test_cuda_graph_topo_alloc_parallel_streams_free_on_main(test, device):
 
 
 def test_cuda_graph_topo_alloc_parallel_streams_free_on_other(test, device):
-    """Freeing side stream allocs does not serialize independent streams"""
+    """Keep independent streams concurrent when freeing allocations on another stream."""
 
     # Expected topology:
     #
@@ -1170,7 +1213,7 @@ def test_cuda_graph_topo_alloc_parallel_streams_free_on_other(test, device):
 
 
 def test_cuda_graph_topo_alloc_parallel_streams_joined(test, device):
-    """Joining parallel side streams exposes both allocs to the parent."""
+    """Verify that joining parallel side streams exposes both allocs to the parent."""
 
     # Expected topology:
     #
@@ -1224,7 +1267,7 @@ def test_cuda_graph_topo_alloc_parallel_streams_joined(test, device):
 
 
 def test_cuda_graph_topo_alloc_nested_streams_chain(test, device):
-    """Nested ``ScopedStream`` blocks chain alloc visibility."""
+    """Verify that nested ``ScopedStream`` blocks chain alloc visibility."""
 
     # Expected topology:
     #
@@ -1263,7 +1306,7 @@ def test_cuda_graph_topo_alloc_nested_streams_chain(test, device):
 
 
 def test_cuda_graph_topo_alloc_nested_streams_chain_free(test, device):
-    """Nested ``ScopedStream`` blocks chain alloc visibility."""
+    """Verify that nested ``ScopedStream`` blocks chain alloc visibility."""
 
     # Expected topology:
     #
@@ -1458,6 +1501,12 @@ cuda_devices = get_selected_cuda_test_devices_with_mempool()
 # returns null on gfx1151. Scope these tests to non-HIP CUDA devices.
 graph_mem_node_devices = [device for device in cuda_devices if not device.is_hip]
 
+add_function_test(
+    TestGraph,
+    "test_cuda_capture_apic_disabled_does_not_retain_caller",
+    test_cuda_capture_apic_disabled_does_not_retain_caller,
+    devices=cuda_devices,
+)
 add_function_test(
     TestGraph,
     "test_cuda_graph_alloc_free_preserves_merged_frontier",

@@ -7,13 +7,13 @@
 # Runs Warp's airspeed velocity (ASV) benchmark suite on an L40 GPU host.
 #
 # Structure:
-#   - `linux-x86_64 asv build` (stage: build): compiles wheels for the MR
+#   - `linux-x86_64 cu13 asv build` (stage: build): compiles wheels for the MR
 #     target ref and the current commit on a CPU runner so the GPU host
 #     doesn't burn L40 booking time on builds. Wheels are shipped to the
 #     bench jobs via the `_wheels/` artifact.
-#   - `linux-x86_64 asv non-tile` (stage: test): always runs once this
+#   - `linux-x86_64 cu13 asv non-tile` (stage: test): always runs once this
 #     pipeline is triggered.
-#   - `linux-x86_64 asv tile` (stage: test): heavier than the rest of the
+#   - `linux-x86_64 cu13 asv tile` (stage: test): heavier than the rest of the
 #     suite combined; auto-runs only on tile-relevant changes, otherwise
 #     available as a manual play button.
 #
@@ -37,16 +37,16 @@ stages:
 # the GPU-bound asv bench jobs don't spend L40 booking time compiling.
 # Wheels are written to asv's native build cache; the bench jobs skip
 # build_command and go straight to install_command using the cached wheels.
-linux-x86_64 asv build:
+linux-x86_64 cu13 asv build:
   stage: build
   needs: []
-  image: $WARP_BUILDER_IMAGE_CU12
+  image: $WARP_BUILDER_IMAGE_CU13_X86_64
   extends:
     - .ipp_lnx_x86_64_cpu_medium
   variables:
     IPP_RUNNER_EXECUTION_DURATION: "3600"
     GIT_DEPTH: "50"
-    CUDA_HOME: "/usr/local/cuda"
+    CUDA_HOME: "/opt/cuda"
   before_script:
     - !reference [.snippets, section-start-install-deps]
     - df -h
@@ -98,6 +98,13 @@ linux-x86_64 asv build:
     - printf "%s\n" "$COMPARE_REF_SOURCE" > _wheels/compare_ref.source
     - printf "%s\n" "$COMPARE_REF_SHA" > _wheels/compare_ref.sha
     - printf "%s\n" "$CI_COMMIT_SHA" > _wheels/target_ref.sha
+    # Count against the pinned baseline here; benchmark checkouts can be shallow.
+    - |
+      if [ "$(git rev-parse --is-shallow-repository)" = "false" ]; then
+        git rev-list --count "$CI_COMMIT_SHA..$COMPARE_REF_SHA" > _wheels/compare_ref.behind_count
+      else
+        echo unknown > _wheels/compare_ref.behind_count
+      fi
     - ls -la _wheels/
   artifacts:
     paths:
@@ -108,10 +115,10 @@ linux-x86_64 asv build:
 # jobs differ only in their `--bench` filter regex and `--machine` name (set
 # via per-job ASV_BENCH_FILTER / ASV_MACHINE_NAME) and their `rules:` block.
 # Everything else -- L40 booking, env setup, wheel-cache restage from the
-# `linux-x86_64 asv build` artifact, asv invocation -- is identical.
-.linux-x86_64-asv-bench-base:
+# `linux-x86_64 cu13 asv build` artifact, asv invocation -- is identical.
+.linux-x86_64-cu13-asv-bench-base:
   stage: test
-  needs: ["linux-x86_64 asv build"]
+  needs: ["linux-x86_64 cu13 asv build"]
   timeout: 8h
   tags:
     - omni-perf-only/linux
@@ -134,6 +141,7 @@ linux-x86_64 asv build:
     - test -s _wheels/target_ref.sha || { echo "missing target ref SHA from asv build artifact"; exit 1; }
     - COMPARE_REF_SOURCE="$(cat _wheels/compare_ref.source)"
     - COMPARE_REF_SHA="$(cat _wheels/compare_ref.sha)"
+    - COMPARE_BEHIND_COUNT="$(cat _wheels/compare_ref.behind_count 2>/dev/null || echo unknown)"
     - TARGET_REF_SHA="$(cat _wheels/target_ref.sha)"
     - 'echo "COMPARE_REF_SOURCE value: ${COMPARE_REF_SOURCE}"'
     - 'echo "COMPARE_REF_SHA value: ${COMPARE_REF_SHA}"'
@@ -185,11 +193,22 @@ linux-x86_64 asv build:
         # rc=1: regressions detected. rc>1: benchmark failures (e.g. a new
         # benchmark uses an API not yet on the compare ref). In both cases,
         # print a comparison table for the benchmarks that did run successfully,
-        # then propagate the original exit status.
+        # then propagate the original exit status after the comparison context.
         uvx asv compare -v --split "$COMPARE_REF_SHA" "$CI_COMMIT_SHA" 2>&1 || true
-        exit "$rc"
       fi
-    - 'date -u +"asv continuous end:   %FT%TZ"'
+      date -u +"asv continuous end:   %FT%TZ"
+      printf '\nComparison context:\n'
+      printf '  Baseline: %s@%s\n' "$COMPARE_REF_SOURCE" "$COMPARE_REF_SHA"
+      printf '  Candidate: %s\n' "$CI_COMMIT_SHA"
+      printf '  Commits behind tested baseline: %s\n' "$COMPARE_BEHIND_COUNT"
+      case "$COMPARE_BEHIND_COUNT" in
+        0|unknown) ;;
+        *)
+          printf '\nPerformance differences may reflect missing upstream changes.\n'
+          echo "Rebase and rerun to determine whether flagged slowdowns persist."
+          ;;
+      esac
+      exit "$rc"
   artifacts:
     paths:
       - asv/results/
@@ -198,8 +217,8 @@ linux-x86_64 asv build:
 
 # Non-tile asv benchmarks. Runs whenever this child pipeline is triggered;
 # the parent's `asv benchmarks` job is what gates ASV on path changes.
-linux-x86_64 asv non-tile:
-  extends: .linux-x86_64-asv-bench-base
+linux-x86_64 cu13 asv non-tile:
+  extends: .linux-x86_64-cu13-asv-bench-base
   variables:
     ASV_MACHINE_NAME: asv-bench-non-tile
     ASV_BENCH_FILTER: '^(?!tile\.)'
@@ -208,8 +227,8 @@ linux-x86_64 asv non-tile:
 # tile-relevant changes; available as a manual play button otherwise for
 # contributors whose change touches tile perf in ways the path filter
 # doesn't catch (e.g. codegen tweaks, Newton-side changes).
-linux-x86_64 asv tile:
-  extends: .linux-x86_64-asv-bench-base
+linux-x86_64 cu13 asv tile:
+  extends: .linux-x86_64-cu13-asv-bench-base
   variables:
     ASV_MACHINE_NAME: asv-bench-tile
     ASV_BENCH_FILTER: '^tile\.'
@@ -221,8 +240,11 @@ linux-x86_64 asv tile:
           - .gitlab/ci/asv.yml
           - asv.conf.json
           - asv/benchmarks/tile/**/*
+          - warp/native/cpu_block_runtime.*
+          - warp/native/cpu_fiber.*
           - warp/native/tile*
           - warp/native/tile/**/*
+          - warp/native/clang/**/*
           # libmathdx (cublasdx etc.) is pulled in by tile.compile_*  and
           # tile.gemm benchmarks at LTO time; bumping its pin in the deps
           # config is exactly the kind of change the tile bench is here to

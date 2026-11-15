@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "api.h"
+
 // This file declares a subset of the C runtime (CRT) functions and macros for
 // use by compute kernel modules. There are three environments in which this
 // file gets included:
@@ -48,6 +50,7 @@ extern "C" WP_API int _wp_isinf(double);
 
 #include <assert.h>
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -326,6 +329,7 @@ void* memcpy(void*, const void*, size_t);
 
 // stdlib.h
 void* malloc(size_t);
+void* calloc(size_t, size_t);
 void free(void*);
 
 }  // extern "C"
