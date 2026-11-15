@@ -68,6 +68,9 @@ using wp_tile_lane_mask_bits_t = decltype(WP_TILE_LANE_MASK_ALL);
 // NVRTC has built-in float4; Clang CUDA JIT defines it in cuda_crt.h
 #if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 // float4 already available
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
+// HIP builds set WP_ENABLE_CUDA but have no CUDA toolkit; float4 comes from the
+// ROCm headers pulled in by hip_util.h.
 #else
 // NVCC: Include vector_types.h to get float4
 #include <cuda_runtime.h>
