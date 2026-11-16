@@ -216,6 +216,10 @@ inline CUDA_CALLABLE void scalar_matmul(const StorageA& A, const StorageB& B, St
     constexpr bool aligned_m = (M % BM == 0);
     constexpr bool aligned_n = (N % BN == 0);
 
+    // As in BLAS, C is not read when beta is zero, so non-finite values in C
+    // cannot reach the result through beta * C.
+    const bool read_c = Accumulate && beta != T(0);
+
     for (int t = WP_TILE_THREAD_IDX; t < num_blocks; t += WP_TILE_BLOCK_DIM) {
         const int block_i = t / blocks_n;
         const int block_j = t % blocks_n;
@@ -315,14 +319,14 @@ inline CUDA_CALLABLE void scalar_matmul(const StorageA& A, const StorageB& B, St
             for (int sj = 0; sj < BN; sj++) {
                 if constexpr (aligned_m && aligned_n) {
                     const int idx = (base_i + si) * sc0 + (base_j + sj) * sc1;
-                    if constexpr (Accumulate)
+                    if (read_c)
                         c_ptr[idx] = ElemC(alpha * sum[si][sj] + beta * T(c_ptr[idx]));
                     else
                         c_ptr[idx] = ElemC(alpha * sum[si][sj]);
                 } else {
                     if (base_i + si < M && base_j + sj < N) {
                         const int idx = (base_i + si) * sc0 + (base_j + sj) * sc1;
-                        if constexpr (Accumulate)
+                        if (read_c)
                             c_ptr[idx] = ElemC(alpha * sum[si][sj] + beta * T(c_ptr[idx]));
                         else
                             c_ptr[idx] = ElemC(alpha * sum[si][sj]);
@@ -346,7 +350,7 @@ template <
     typename TileC,
     typename Alpha,
     typename Beta>
-inline CUDA_CALLABLE TileC& tile_matmul(
+CUDA_CALLABLE TileC& tile_matmul(
     Fwd fun_forward, AdjA fun_backward_A, AdjB fun_backward_B, TileA& A, TileB& B, TileC& C, Alpha& alpha, Beta& beta
 )
 {
@@ -367,7 +371,7 @@ inline CUDA_CALLABLE TileC& tile_matmul(
     T alphaT = T(alpha);
     T betaT = T(beta);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_matmul<false, typename TileA::Layout, typename TileB::Layout, typename TileC::Layout>(
         A.data, B.data, C.data, alphaT, betaT
     );
@@ -386,7 +390,7 @@ inline CUDA_CALLABLE TileC& tile_matmul(
     return C;
 }
 
-// tile_matmul_acc: C = alpha * A @ B + beta * C (accumulates into C)
+// tile_matmul_acc: C = alpha * A @ B + beta * C (accumulates into C, does not read C when beta == 0)
 template <
     typename Fwd,
     typename AdjA,
@@ -396,7 +400,7 @@ template <
     typename TileC,
     typename Alpha,
     typename Beta>
-inline CUDA_CALLABLE TileC& tile_matmul_acc(
+CUDA_CALLABLE TileC& tile_matmul_acc(
     Fwd fun_forward, AdjA fun_backward_A, AdjB fun_backward_B, TileA& A, TileB& B, TileC& C, Alpha& alpha, Beta& beta
 )
 {
@@ -417,7 +421,7 @@ inline CUDA_CALLABLE TileC& tile_matmul_acc(
     T alphaT = T(alpha);
     T betaT = T(beta);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_matmul<true, typename TileA::Layout, typename TileB::Layout, typename TileC::Layout>(
         A.data, B.data, C.data, alphaT, betaT
     );
@@ -449,7 +453,7 @@ template <
     typename Beta,
     typename AdjAlpha,
     typename AdjBeta>
-inline CUDA_CALLABLE void adj_tile_matmul_acc(
+CUDA_CALLABLE void adj_tile_matmul_acc(
     Fwd fun_forward,
     AdjA fun_backward_A,
     AdjB fun_backward_B,
@@ -477,7 +481,7 @@ inline CUDA_CALLABLE void adj_tile_matmul_acc(
     T_B alpha_B = T_B(alpha);
     T_B beta_B = T_B(1.0);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     auto At = tile_transpose(A);
     auto Bt = tile_transpose(B);
 
@@ -509,6 +513,11 @@ inline CUDA_CALLABLE void adj_tile_matmul_acc(
     }
 #endif
 
+    // The matmuls read several adj_C slots per lane, while beta scaling below
+    // modifies each lane's local slot. Make every read complete before any
+    // cooperative CPU fiber begins the in-place scaling phase.
+    WP_TILE_SYNC();
+
     if (T_C(beta) != T_C(1.0)) {
         for (int i = WP_TILE_THREAD_IDX; i < TileC::Layout::Size; i += WP_TILE_BLOCK_DIM)
             adj_C.grad(i) *= T_C(beta);
@@ -529,7 +538,7 @@ template <
     typename Beta,
     typename AdjAlpha,
     typename AdjBeta>
-inline CUDA_CALLABLE void adj_tile_matmul(
+CUDA_CALLABLE void adj_tile_matmul(
     Fwd fun_forward,
     AdjA fun_backward_A,
     AdjB fun_backward_B,
@@ -558,7 +567,7 @@ inline CUDA_CALLABLE void adj_tile_matmul(
     T_B alpha_B = T_B(alpha);
     T_B beta_B = T_B(1.0);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     auto At = tile_transpose(A);
     auto Bt = tile_transpose(B);
 

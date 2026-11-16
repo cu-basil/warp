@@ -42,6 +42,20 @@
 
 #endif
 
+// Cross-compiler inline control for generated functions and native helpers.
+// CUDA compilation uses Clang-style attributes because Warp's JIT omits the
+// toolkit header that normally defines __noinline__ and __forceinline__.
+#if defined(__CUDA_ARCH__) || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
+#define WP_NOINLINE __attribute__((noinline))
+#define WP_FORCEINLINE inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define WP_NOINLINE __declspec(noinline)
+#define WP_FORCEINLINE __forceinline
+#else
+#define WP_NOINLINE __attribute__((noinline))
+#define WP_FORCEINLINE inline __attribute__((always_inline))
+#endif
+
 // Tile block dimension used while building the warp core library
 #ifndef WP_TILE_BLOCK_DIM
 #define WP_TILE_BLOCK_DIM 256
@@ -652,7 +666,6 @@ inline CUDA_CALLABLE T mod(T a, T b) { return a%b; } \
 inline CUDA_CALLABLE T min(T a, T b) { return a<b?a:b; } \
 inline CUDA_CALLABLE T max(T a, T b) { return a>b?a:b; } \
 inline CUDA_CALLABLE T clamp(T x, T a, T b) { return min(max(a, x), b); } \
-inline CUDA_CALLABLE T floordiv(T a, T b) { return a/b; } \
 inline CUDA_CALLABLE T nonzero(T x) { return x == T(0) ? T(0) : T(1); } \
 inline CUDA_CALLABLE T bit_and(T a, T b) { return a&b; } \
 inline CUDA_CALLABLE T bit_or(T a, T b) { return a|b; } \
@@ -698,6 +711,77 @@ DECLARE_INT_OPS(uint8)
 DECLARE_INT_OPS(uint16)
 DECLARE_INT_OPS(uint32)
 DECLARE_INT_OPS(uint64)
+
+inline CUDA_CALLABLE int32 bit_count(uint32 x)
+{
+#if defined(__CUDA_ARCH__)
+    return __popc(static_cast<unsigned int>(x));
+#elif defined(__clang__) || defined(__GNUC__)
+    return __builtin_popcount(static_cast<unsigned int>(x));
+#else
+    int32 count = 0;
+    while (x) {
+        x &= x - uint32(1);
+        ++count;
+    }
+    return count;
+#endif
+}
+
+inline CUDA_CALLABLE int32 bit_count(uint64 x)
+{
+#if defined(__CUDA_ARCH__)
+    return __popcll(static_cast<unsigned long long>(x));
+#elif defined(__clang__) || defined(__GNUC__)
+    return __builtin_popcountll(static_cast<unsigned long long>(x));
+#else
+    int32 count = 0;
+    while (x) {
+        x &= x - uint64(1);
+        ++count;
+    }
+    return count;
+#endif
+}
+
+inline CUDA_CALLABLE int32 bit_count(uint8 x) { return bit_count(static_cast<uint32>(x)); }
+inline CUDA_CALLABLE int32 bit_count(uint16 x) { return bit_count(static_cast<uint32>(x)); }
+// Convert signed inputs to their unsigned width before widening to avoid sign extension.
+inline CUDA_CALLABLE int32 bit_count(int8 x) { return bit_count(static_cast<uint8>(x)); }
+inline CUDA_CALLABLE int32 bit_count(int16 x) { return bit_count(static_cast<uint16>(x)); }
+inline CUDA_CALLABLE int32 bit_count(int32 x) { return bit_count(static_cast<uint32>(x)); }
+inline CUDA_CALLABLE int32 bit_count(int64 x) { return bit_count(static_cast<uint64>(x)); }
+
+/* C++ integer division truncates toward zero; adjust signed, non-exact
+   results with opposite signs to round toward negative infinity. */
+template <typename T> inline CUDA_CALLABLE T floordiv_signed(T a, T b)
+{
+    T q = a / b;
+
+#if !defined(__CUDA_ARCH__) && (defined(__clang__) || defined(__GNUC__))
+    // Keep the quotient/remainder form below for constant divisors so the
+    // compiler can strength-reduce both operations. For runtime divisors,
+    // checking the operand signs first avoids unnecessary correction work.
+    if (!__builtin_constant_p(b)) {
+        if ((a < T(0)) != (b < T(0)) && a % b != T(0))
+            q -= T(1);
+        return q;
+    }
+#endif
+
+    T r = a % b;
+    if (r != T(0) && ((r < T(0)) != (b < T(0))))
+        q -= T(1);
+    return q;
+}
+inline CUDA_CALLABLE int8 floordiv(int8 a, int8 b) { return floordiv_signed(a, b); }
+inline CUDA_CALLABLE int16 floordiv(int16 a, int16 b) { return floordiv_signed(a, b); }
+inline CUDA_CALLABLE int32 floordiv(int32 a, int32 b) { return floordiv_signed(a, b); }
+inline CUDA_CALLABLE int64 floordiv(int64 a, int64 b) { return floordiv_signed(a, b); }
+inline CUDA_CALLABLE uint8 floordiv(uint8 a, uint8 b) { return a / b; }
+inline CUDA_CALLABLE uint16 floordiv(uint16 a, uint16 b) { return a / b; }
+inline CUDA_CALLABLE uint32 floordiv(uint32 a, uint32 b) { return a / b; }
+inline CUDA_CALLABLE uint64 floordiv(uint64 a, uint64 b) { return a / b; }
 
 
 inline CUDA_CALLABLE int8 step(int8 x) { return x < 0 ? 1 : 0; }
@@ -2001,7 +2085,7 @@ static constexpr int LAUNCH_MAX_DIMS = 4;  // should match types.py
 template <int N> struct launch_bounds_t {
     static_assert(N > 0 && N <= LAUNCH_MAX_DIMS, "launch_bounds_t<N> only supports 1-4 dimensions");
 
-    int shape[N];
+    uint32_t shape[N];
     size_t size;
     size_t coord_mult;  // threads sharing each coord tuple; launch_coord divides linear by this before unraveling
 };
@@ -2049,7 +2133,7 @@ inline CUDA_CALLABLE int block_dim()
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     return blockDim.x;
 #else
-    return 1;
+    return WP_TILE_BLOCK_DIM;
 #endif
 }
 
@@ -2065,6 +2149,18 @@ template <int N> inline CUDA_CALLABLE int tid(size_t index, const launch_bounds_
 
     launch_coord_t coord = launch_coord(index, bounds);
     return static_cast<int>(coord.i);
+}
+
+// CPU code generation selects the common linear-coordinate specialization once
+// outside the task loop. CUDA and generic CPU paths continue to use tid().
+template <bool Linear, int N> inline int linear_tid(size_t index, const launch_bounds_t<N>& bounds)
+{
+    if constexpr (Linear) {
+        static_assert(N == 1, "The linear wp.tid() specialization requires one-dimensional kernel coordinates");
+        return static_cast<int>(index);
+    } else {
+        return tid(index, bounds);
+    }
 }
 
 template <int N> inline CUDA_CALLABLE_DEVICE void tid(int& i, int& j, size_t index, const launch_bounds_t<N>& bounds)
@@ -2219,8 +2315,8 @@ template <> inline CUDA_CALLABLE int64 atomic_add(int64* buf, int64 value)
     int64 old = buf[0];
     buf[0] += value;
     return old;
-#else  // CUDA/HIP compiled by NVRTC
-    unsigned long long int* buf_as_ull = (unsigned long long int*)buf;
+#else  // CUDA compiled by NVRTC
+    unsigned long long int* buf_as_ull = reinterpret_cast<unsigned long long int*>(buf);
     unsigned long long int unsigned_value = static_cast<unsigned long long int>(value);
     unsigned long long int result = atomicAdd(buf_as_ull, unsigned_value);
     return static_cast<int64>(result);

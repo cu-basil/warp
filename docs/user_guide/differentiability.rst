@@ -148,6 +148,13 @@ detect array overwrites. :ref:`Read more here<array_overwrite_tracking>`.
     Though in-place operations such as ``x[tid] += 1.0`` and :func:`wp.atomic_add() <warp._src.lang.atomic_add>` are technically overwrite operations,
     the Warp graph specifically accommodates adjoint accumulation in these cases. :ref:`Read more here<in_place_math>`.
 
+Warp can differentiate builtin atomic ``+=`` and ``-=`` updates to array components.
+It rejects other augmented assignments to differentiable components when generating
+backward code, including those handled by user-defined operators. For example,
+``values[i].x += rhs`` is unsupported if a user-defined ``add`` function handles it.
+Write the result to a separate array, or set
+``enable_backward=False`` on the kernel if you only need forward execution.
+
 Copying is Differentiable
 #########################
 
@@ -520,6 +527,7 @@ In the following, we increment an array index in each thread via :func:`wp.atomi
 the square root of an input array at the incremented index:
 
 .. testcode::
+    :skipif: wp.get_cuda_device_count() == 0
 
     @wp.kernel
     def test_add(counter: wp.array[int], input: wp.array[float], output: wp.array[float]):
@@ -551,6 +559,7 @@ the square root of an input array at the incremented index:
 The output of the above code is:
 
 .. testoutput::
+    :skipif: wp.get_cuda_device_count() == 0
 
     counter:     [8]
     thread_ids:  [0 0 0 0 0 0 0 0]
@@ -1348,6 +1357,7 @@ This code produces incorrect gradients instead of ``[4. 4. 4.]``:
 We can fix the latter case by switching to a static loop (e.g. replacing ``range(iters)`` with ``range(3)``). Static loops are
 automatically unrolled if the number of loop iterations is less than or equal to the ``max_unroll`` parameter set in :const:`wp.config <config>`
 or at the module level with ``wp.set_module_options({"max_unroll": N})``, and so intermediate values in the loop are individually stored.
+This also applies to loops containing ``continue``.
 But in scenarios where this is not possible, you may consider allocating additional memory to store intermediate values in the dynamic loop.
 For example, we can fix the above case like so:
 
