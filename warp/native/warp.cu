@@ -6183,6 +6183,7 @@ bool wp_cuda_compile_solver(
 
 #endif
 
+#if !defined(__HIP_PLATFORM_AMD__)
 static const char* apic_nvptx_error_string(nvPTXCompileResult result)
 {
     switch (result) {
@@ -6206,6 +6207,7 @@ static const char* apic_nvptx_error_string(nvPTXCompileResult result)
         return "unknown error";
     }
 }
+#endif
 
 static std::string apic_cuda_error_string(CUresult result)
 {
@@ -6268,6 +6270,7 @@ static bool apic_cuda_load_module_data(
             return true;
         }
 
+#if !defined(__HIP_PLATFORM_AMD__)
         ContextInfo* context_info = get_context_info(static_cast<CUcontext>(context));
         if (!context_info || !context_info->device_info) {
             diagnostic = "could not determine the CUDA device architecture";
@@ -6316,6 +6319,10 @@ static bool apic_cuda_load_module_data(
             return false;
         }
         return true;
+#else
+        diagnostic = "nvPTX JIT compilation is not available on HIP; pass a code object instead";
+        return false;
+#endif
     }
 
     CUresult result = cuModuleLoadDataEx_f(module, input, 0, nullptr, nullptr);
