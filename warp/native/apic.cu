@@ -1319,7 +1319,7 @@ static bool apic_load_cuda_module(
     } else {
         std::string load_diagnostic;
         if (apic_cuda_load_module_data(
-                context, packaged_data.data(), packaged_data.size(), module.binary_kind == APIC_CUDA_BINARY_PTX,
+                context, reinterpret_cast<const uint8_t*>(packaged_data.data()), packaged_data.size(), module.binary_kind == APIC_CUDA_BINARY_PTX,
                 &module.cuda_module, load_diagnostic
             )) {
             return true;

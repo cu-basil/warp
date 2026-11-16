@@ -6250,6 +6250,7 @@ static bool apic_cuda_load_module_data(
     if (load_ptx) {
         int driver_cuda_version = 0;
         CUresult driver_version_result = cuDriverGetVersion_f(&driver_cuda_version);
+#if !defined(__HIP_PLATFORM_AMD__)
         if (driver_version_result == CUDA_SUCCESS && driver_cuda_version >= CUDA_VERSION) {
             CUjit_option options[2];
             void* option_values[2];
@@ -6269,6 +6270,7 @@ static bool apic_cuda_load_module_data(
             }
             return true;
         }
+#endif  // !defined(__HIP_PLATFORM_AMD__)
 
 #if !defined(__HIP_PLATFORM_AMD__)
         ContextInfo* context_info = get_context_info(static_cast<CUcontext>(context));
@@ -6428,11 +6430,8 @@ static void* cuda_load_module_image(void* context, const char* image, size_t siz
 
     if (is_ptx) {
 #if defined(__HIP_PLATFORM_AMD__)
-        if (!check_cu(cuModuleLoadDataEx_f(&module, input.data(), 0, NULL, NULL))) {
-            fprintf(
-                stderr,
-                "Warp error: Failed to load HIP code object from '%s'. PTX is not supported on HIP; use HSACO.\n", path
-            );
+        if (!check_cu(cuModuleLoadDataEx_f(&module, image, 0, NULL, NULL))) {
+            fprintf(stderr, "Warp error: Failed to load HIP code object. PTX is not supported on HIP; use HSACO.\n");
             return NULL;
         }
 #else
