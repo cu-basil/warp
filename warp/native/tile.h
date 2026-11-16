@@ -327,7 +327,7 @@ template <int N> struct tile_coord_t {
 };
 
 // This function deduces N = sizeof...(Ints)
-template <typename... Ints> constexpr tile_coord_t<sizeof...(Ints)> tile_coord(Ints... idxs)
+template <typename... Ints> constexpr CUDA_CALLABLE tile_coord_t<sizeof...(Ints)> tile_coord(Ints... idxs)
 {
     constexpr int N = sizeof...(Ints);
 
@@ -346,14 +346,14 @@ template <typename... Ints> constexpr tile_coord_t<sizeof...(Ints)> tile_coord(I
 }
 
 // helpers to construct a coord from a set of indices
-inline auto tile_coord(int i)
+inline CUDA_CALLABLE auto tile_coord(int i)
 {
     auto c = tile_coord_t<1>();
     c.indices[0] = i;
     return c;
 }
 
-inline auto tile_coord(int i, int j)
+inline CUDA_CALLABLE auto tile_coord(int i, int j)
 {
     auto c = tile_coord_t<2>();
     c.indices[0] = i;
@@ -361,7 +361,7 @@ inline auto tile_coord(int i, int j)
     return c;
 }
 
-inline auto tile_coord(int i, int j, int k)
+inline CUDA_CALLABLE auto tile_coord(int i, int j, int k)
 {
     auto c = tile_coord_t<3>();
     c.indices[0] = i;
@@ -370,7 +370,7 @@ inline auto tile_coord(int i, int j, int k)
     return c;
 }
 
-inline auto tile_coord(int i, int j, int k, int l)
+inline CUDA_CALLABLE auto tile_coord(int i, int j, int k, int l)
 {
     auto c = tile_coord_t<4>();
     c.indices[0] = i;
@@ -803,7 +803,7 @@ template <typename T, typename Shape_, bool BoundsCheck = true, bool Aligned = f
     array_t<T> data;
     Coord offset;
 
-    tile_global_t(array_t<T>& a, const Coord& c)
+    CUDA_CALLABLE tile_global_t(array_t<T>& a, const Coord& c)
         : data(a)
         , offset(c)
     {
@@ -1121,7 +1121,7 @@ template <typename T, typename L> struct tile_register_t {
 
     // apply a lambda to all valid entries in the tile
     // Op should be a functor that takes a register index and tile_coord_t as input
-    template <typename Op> void apply(Op op)
+    template <typename Op> CUDA_CALLABLE void apply(Op op)
     {
         WP_PRAGMA_UNROLL
         for (int i = 0; i < Layout::NumRegs; ++i) {
@@ -1201,7 +1201,7 @@ template <typename T, typename L> struct tile_register_t {
 // helper to allocate a register tile like another tile
 // users can either specify a template explicitly or
 // pass in another concrete instance
-template <typename Tile> auto tile_register_like(Tile* t = nullptr)
+template <typename Tile> CUDA_CALLABLE auto tile_register_like(Tile* t = nullptr)
 {
     using T = typename Tile::Type;
     using L = typename Tile::Layout;
@@ -1220,7 +1220,7 @@ template <typename Shape, typename T> inline CUDA_CALLABLE auto tile_register_li
 }
 
 // helper to construct a register tile from a type and a list of dims
-template <typename T, int... Dims> auto tile_register()
+template <typename T, int... Dims> CUDA_CALLABLE auto tile_register()
 {
     return tile_register_t<T, tile_layout_register_t<tile_shape_t<Dims...>>>();
 }
@@ -4769,18 +4769,18 @@ template <typename Tile, typename... Indices> inline CUDA_CALLABLE auto tile_ext
     }
 }
 
-template <typename Tile> auto tile_extract(Tile& t, int i) { return tile_extract_impl(t, i); }
-template <typename Tile> auto tile_extract(Tile& t, int i, int j) { return tile_extract_impl(t, i, j); }
-template <typename Tile> auto tile_extract(Tile& t, int i, int j, int k) { return tile_extract_impl(t, i, j, k); }
-template <typename Tile> auto tile_extract(Tile& t, int i, int j, int k, int l)
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i) { return tile_extract_impl(t, i); }
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i, int j) { return tile_extract_impl(t, i, j); }
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i, int j, int k) { return tile_extract_impl(t, i, j, k); }
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i, int j, int k, int l)
 {
     return tile_extract_impl(t, i, j, k, l);
 }
-template <typename Tile> auto tile_extract(Tile& t, int i, int j, int k, int l, int m)
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i, int j, int k, int l, int m)
 {
     return tile_extract_impl(t, i, j, k, l, m);
 }
-template <typename Tile> auto tile_extract(Tile& t, int i, int j, int k, int l, int m, int n)
+template <typename Tile> CUDA_CALLABLE auto tile_extract(Tile& t, int i, int j, int k, int l, int m, int n)
 {
     return tile_extract_impl(t, i, j, k, l, m, n);
 }
@@ -4816,12 +4816,12 @@ inline CUDA_CALLABLE void adj_tile_extract_impl(Tile& t, AdjTile& adj_t, AdjType
 }
 
 template <typename Tile, typename AdjTile>
-void adj_tile_extract(Tile& t, int i, AdjTile& adj_t, int adj_i, typename Tile::Type adj_ret)
+CUDA_CALLABLE void adj_tile_extract(Tile& t, int i, AdjTile& adj_t, int adj_i, typename Tile::Type adj_ret)
 {
     adj_tile_extract_impl(t, adj_t, adj_ret, i);
 }
 template <typename Tile, typename AdjTile, typename AdjType>
-void adj_tile_extract(Tile& t, int i, int j, AdjTile& adj_t, int adj_i, int adj_j, AdjType adj_ret)
+CUDA_CALLABLE void adj_tile_extract(Tile& t, int i, int j, AdjTile& adj_t, int adj_i, int adj_j, AdjType adj_ret)
 {
     adj_tile_extract_impl(t, adj_t, adj_ret, i, j);
 }
@@ -5282,87 +5282,87 @@ inline CUDA_CALLABLE void adj_tile_scatter_masked(
 }
 
 
-template <typename Tile> void tile_add_inplace(Tile& t, int i, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_add_inplace(Tile& t, int i, typename Tile::Type value)
 {
     t.add_inplace(tile_coord(i), value);
 }
-template <typename Tile> void tile_add_inplace(Tile& t, int i, int j, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_add_inplace(Tile& t, int i, int j, typename Tile::Type value)
 {
     t.add_inplace(tile_coord(i, j), value);
 }
-template <typename Tile> void tile_add_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_add_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
 {
     t.add_inplace(tile_coord(i, j, k), value);
 }
-template <typename Tile> void tile_add_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_add_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
 {
     t.add_inplace(tile_coord(i, j, k, l), value);
 }
 
-template <typename Tile> void tile_sub_inplace(Tile& t, int i, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_sub_inplace(Tile& t, int i, typename Tile::Type value)
 {
     t.sub_inplace(tile_coord(i), value);
 }
-template <typename Tile> void tile_sub_inplace(Tile& t, int i, int j, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_sub_inplace(Tile& t, int i, int j, typename Tile::Type value)
 {
     t.sub_inplace(tile_coord(i, j), value);
 }
-template <typename Tile> void tile_sub_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_sub_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
 {
     t.sub_inplace(tile_coord(i, j, k), value);
 }
-template <typename Tile> void tile_sub_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_sub_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
 {
     t.sub_inplace(tile_coord(i, j, k, l), value);
 }
 
-template <typename Tile> void tile_bit_and_inplace(Tile& t, int i, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_and_inplace(Tile& t, int i, typename Tile::Type value)
 {
     t.bit_and_inplace(tile_coord(i), value);
 }
-template <typename Tile> void tile_bit_and_inplace(Tile& t, int i, int j, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_and_inplace(Tile& t, int i, int j, typename Tile::Type value)
 {
     t.bit_and_inplace(tile_coord(i, j), value);
 }
-template <typename Tile> void tile_bit_and_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_and_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
 {
     t.bit_and_inplace(tile_coord(i, j, k), value);
 }
-template <typename Tile> void tile_bit_and_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_and_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
 {
     t.bit_and_inplace(tile_coord(i, j, k, l), value);
 }
 
-template <typename Tile> void tile_bit_or_inplace(Tile& t, int i, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_or_inplace(Tile& t, int i, typename Tile::Type value)
 {
     t.bit_or_inplace(tile_coord(i), value);
 }
-template <typename Tile> void tile_bit_or_inplace(Tile& t, int i, int j, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_or_inplace(Tile& t, int i, int j, typename Tile::Type value)
 {
     t.bit_or_inplace(tile_coord(i, j), value);
 }
-template <typename Tile> void tile_bit_or_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_or_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
 {
     t.bit_or_inplace(tile_coord(i, j, k), value);
 }
-template <typename Tile> void tile_bit_or_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_or_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
 {
     t.bit_or_inplace(tile_coord(i, j, k, l), value);
 }
 
-template <typename Tile> void tile_bit_xor_inplace(Tile& t, int i, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_xor_inplace(Tile& t, int i, typename Tile::Type value)
 {
     t.bit_xor_inplace(tile_coord(i), value);
 }
-template <typename Tile> void tile_bit_xor_inplace(Tile& t, int i, int j, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_xor_inplace(Tile& t, int i, int j, typename Tile::Type value)
 {
     t.bit_xor_inplace(tile_coord(i, j), value);
 }
-template <typename Tile> void tile_bit_xor_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_xor_inplace(Tile& t, int i, int j, int k, typename Tile::Type value)
 {
     t.bit_xor_inplace(tile_coord(i, j, k), value);
 }
-template <typename Tile> void tile_bit_xor_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
+template <typename Tile> CUDA_CALLABLE void tile_bit_xor_inplace(Tile& t, int i, int j, int k, int l, typename Tile::Type value)
 {
     t.bit_xor_inplace(tile_coord(i, j, k, l), value);
 }
