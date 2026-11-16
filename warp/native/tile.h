@@ -103,7 +103,7 @@ template <int BlockDim> inline void tile_sync()
 #define WP_TILE_SYNC ::wp::tile_sync<WP_TILE_BLOCK_DIM>
 #endif
 
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__) && !defined(__INTELLISENSE__)
+#if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && !defined(__INTELLISENSE__)
 #if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 #define WP_PRAGMA_UNROLL _Pragma("unroll")
 #define WP_PRAGMA_NO_UNROLL _Pragma("unroll 1")
@@ -130,7 +130,7 @@ template <> struct wp_is_null_func<int> {
     static constexpr bool value = true;
 };
 
-#if defined(__CUDA_ARCH__) || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__) || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 #define WP_TILE_THREAD_IDX threadIdx.x
 #else
 // Preserve the literal-zero specialization in unoptimized CPU debug builds.
