@@ -191,6 +191,10 @@ def build_cuda(
         # include paths so hipRTC can find <hip/hip_runtime.h>, <stddef.h>, etc.
         is_hip = (arch == 0 and arch_suffix and arch_suffix.startswith("gfx"))
         if is_hip:
+            import glob
+
+            gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
+            hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
             extra_inc_dirs = [b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
             num_extra_inc = len(extra_inc_dirs)
             arr_extra_inc = (ctypes.c_char_p * num_extra_inc)(*extra_inc_dirs)
