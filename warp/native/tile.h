@@ -1550,7 +1550,7 @@ template <typename T, typename L, bool Owner_ = true> struct tile_shared_t {
     struct Storage {
         T* ptr;
 
-        Storage(T* p)
+        CUDA_CALLABLE Storage(T* p)
             : ptr(p)
         {
         }
