@@ -1357,7 +1357,7 @@ static bool apic_load_cuda_module(
     if (apic_read_file(cache_path.c_str(), cache_data)) {
         std::string load_diagnostic;
         if (apic_cuda_load_module_data(
-                context, cache_data.data(), cache_data.size(), use_ptx, &module.cuda_module, load_diagnostic
+                context, reinterpret_cast<const uint8_t*>(cache_data.data()), cache_data.size(), use_ptx, &module.cuda_module, load_diagnostic
             )) {
             return true;
         }
@@ -1416,7 +1416,7 @@ static bool apic_load_cuda_module(
 
     std::string load_diagnostic;
     if (!apic_cuda_load_module_data(
-            context, compiled_data.data(), compiled_data.size(), use_ptx, &module.cuda_module, load_diagnostic
+            context, reinterpret_cast<const uint8_t*>(compiled_data.data()), compiled_data.size(), use_ptx, &module.cuda_module, load_diagnostic
         )) {
         diagnostics.push_back("freshly compiled guest binary was rejected: " + load_diagnostic);
         wp::set_error_string(
