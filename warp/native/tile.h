@@ -104,7 +104,7 @@ template <int BlockDim> inline void tile_sync()
 #endif
 
 #if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && !defined(__INTELLISENSE__)
-#if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
+#if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__HIP_DEVICE_COMPILE__)
 #define WP_PRAGMA_UNROLL _Pragma("unroll")
 #define WP_PRAGMA_NO_UNROLL _Pragma("unroll 1")
 #else
