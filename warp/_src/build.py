@@ -195,12 +195,10 @@ def build_cuda(
 
             gcc_includes = glob.glob("/usr/lib/gcc/x86_64-linux-gnu/*/include")
             hip_extra_includes = gcc_includes[-1] if gcc_includes else "/usr/lib/gcc/x86_64-linux-gnu/13/include"
-            extra_inc_dirs = [b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
-            num_extra_inc = len(extra_inc_dirs)
-            arr_extra_inc = (ctypes.c_char_p * num_extra_inc)(*extra_inc_dirs)
-        else:
-            num_extra_inc = 0
-            arr_extra_inc = None
+            hip_dirs = [b"/opt/rocm/include", hip_extra_includes.encode("utf-8")]
+            hip_dirs.extend(extra_cuda_include_dirs)
+            num_cuda_include_dirs = len(hip_dirs)
+            cuda_include_dirs = (ctypes.c_char_p * num_cuda_include_dirs)(*hip_dirs)
         err = warp._src.context.runtime.core.wp_cuda_compile_program(
             src,
             program_name_bytes,
