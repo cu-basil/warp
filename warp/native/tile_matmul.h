@@ -371,7 +371,7 @@ CUDA_CALLABLE TileC& tile_matmul(
     T alphaT = T(alpha);
     T betaT = T(beta);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_matmul<false, typename TileA::Layout, typename TileB::Layout, typename TileC::Layout>(
         A.data, B.data, C.data, alphaT, betaT
     );
@@ -421,7 +421,7 @@ CUDA_CALLABLE TileC& tile_matmul_acc(
     T alphaT = T(alpha);
     T betaT = T(beta);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_matmul<true, typename TileA::Layout, typename TileB::Layout, typename TileC::Layout>(
         A.data, B.data, C.data, alphaT, betaT
     );
@@ -481,7 +481,7 @@ CUDA_CALLABLE void adj_tile_matmul_acc(
     T_B alpha_B = T_B(alpha);
     T_B beta_B = T_B(1.0);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     auto At = tile_transpose(A);
     auto Bt = tile_transpose(B);
 
@@ -567,7 +567,7 @@ CUDA_CALLABLE void adj_tile_matmul(
     T_B alpha_B = T_B(alpha);
     T_B beta_B = T_B(1.0);
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     auto At = tile_transpose(A);
     auto Bt = tile_transpose(B);
 

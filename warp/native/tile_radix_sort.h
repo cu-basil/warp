@@ -52,7 +52,7 @@ struct FloatKeyToUint {
     // http://stereopsis.com/radix.html
     inline CUDA_CALLABLE uint32_t convert(float value)
     {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
         unsigned int i = __float_as_uint(value);
 #else
         union {
@@ -104,7 +104,7 @@ constexpr inline CUDA_CALLABLE int next_higher_pow2(int input)
 }
 
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 
 
 // Bitonic sort fast pass for small arrays

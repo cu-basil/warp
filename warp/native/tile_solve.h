@@ -176,7 +176,7 @@ TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, Tile
     // Copy y to z
     z = y;
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_forward_substitution<false>(L, z, y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
@@ -194,7 +194,7 @@ TileZ& tile_lower_solve(Fwd fun_forward, Bkwd fun_bkwd, TileL& L, TileY& y, Tile
 template <typename Fwd, typename TileL, typename TileY>
 void tile_lower_solve_inplace(Fwd fun_forward, TileL& L, TileY& y)
 {
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_forward_substitution<false>(L, y, y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
@@ -246,7 +246,7 @@ CUDA_CALLABLE void adj_tile_lower_solve(
 
     // Raw scratch for the transposed solve L^T W = adj_ret. Cooperative CPU
     // fibers must share this storage across their thread-strided phases.
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     __shared__ T W[n * nrhs];
 #else
     T W_local[WP_TILE_BLOCK_DIM == 1 ? n * nrhs : 1];
@@ -271,7 +271,7 @@ CUDA_CALLABLE void adj_tile_lower_solve(
     }
     WP_TILE_SYNC();
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     // scalar path
     partitioned_gemm::scalar_cholesky_back_substitution<false>(L, W_tile);
 #else
@@ -313,7 +313,7 @@ CUDA_CALLABLE void adj_tile_lower_solve(
     }
     WP_TILE_SYNC();
 
-#if !defined(__CUDA_ARCH__)
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
     if constexpr (WP_TILE_BLOCK_DIM > 1)
         tile_shared_storage_t::alloc(-int(sizeof(T) * n * nrhs));
 #endif
@@ -335,7 +335,7 @@ TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
     // Copy z to x
     x = z;
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     {
         auto L = tile_transpose(U);
         partitioned_gemm::scalar_cholesky_back_substitution<false>(L, x);
@@ -357,7 +357,7 @@ TileX& tile_upper_solve(Fwd fun_forward, TileU& U, TileZ& z, TileX& x)
 template <typename Fwd, typename TileU, typename TileZ>
 void tile_upper_solve_inplace(Fwd fun_forward, TileU& U, TileZ& z)
 {
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     {
         auto L = tile_transpose(U);
         partitioned_gemm::scalar_cholesky_back_substitution<false>(L, z);
@@ -417,7 +417,7 @@ TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
 
     X = Y;
 
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_solve<Upper>(A, X, Y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {
@@ -435,7 +435,7 @@ TileX& tile_cholesky_solve(Fwd fun_forward, TileA& A, TileY& Y, TileX& X)
 template <bool Upper, typename Fwd, typename TileA, typename TileY>
 void tile_cholesky_solve_inplace(Fwd fun_forward, TileA& A, TileY& Y)
 {
-#if !defined(__CUDA_ARCH__) || WP_ENABLE_MATHDX == 0
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) || WP_ENABLE_MATHDX == 0
     partitioned_gemm::scalar_cholesky_solve<Upper>(A, Y, Y);
 #else
     if constexpr (wp_is_null_func<Fwd>::value) {

@@ -61,7 +61,7 @@ template <> inline CUDA_CALLABLE float OpMin<float>::identity() const { return N
 
 template <> inline CUDA_CALLABLE double OpMin<double>::identity() const { return NAN; }
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 
 template <typename T, typename Op = OpAdd<T>> inline CUDA_CALLABLE T scan_warp_inclusive(int lane, T value)
 {

@@ -25,7 +25,7 @@ template <typename T> int argmin_tracker(T champion_value, T current_value, int 
 }
 
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 
 // half / float16 uses a dedicated overload to shuffle its 16-bit payload directly.
 inline CUDA_CALLABLE half warp_shuffle_down(half val, int offset, wp_tile_lane_mask_bits_t mask)
@@ -1021,7 +1021,7 @@ template <typename Tile, typename AdjTile> CUDA_CALLABLE void adj_tile_sum(Tile&
 
     auto adj_reg = adj_ret.grad_to_register();
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // broadcast incoming adjoint to block
     // CUDA ignores the constructor a __shared__ T would run, and NVRTC
     // diagnoses it, so reserve raw storage and view it as T.
@@ -1098,7 +1098,7 @@ template <typename TileA, typename TileB> CUDA_CALLABLE auto tile_dot(TileA& a, 
     }
 
     // Phase 2: cross-thread reduction (same pattern as tile_reduce_impl)
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     constexpr int warp_count = (WP_TILE_BLOCK_DIM + WP_TILE_WARP_SIZE - 1) / WP_TILE_WARP_SIZE;
     auto add_op = [](ScalarT x, ScalarT y) { return x + y; };
 
@@ -1179,7 +1179,7 @@ CUDA_CALLABLE void adj_tile_dot(TileA& a, TileB& b, AdjTileA& adj_a, AdjTileB& a
 
     auto adj_reg = adj_ret.grad_to_register();
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
     // broadcast incoming adjoint to block
     // CUDA ignores the constructor a __shared__ ScalarT would run, and NVRTC
     // diagnoses it, so reserve raw storage and view it as ScalarT.
