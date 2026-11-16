@@ -29,7 +29,12 @@ namespace wp {
 // overridable. Only the participation mask is lane-width dependent.
 #define WP_TILE_BITONIC_GROUP_SIZE 32
 #ifndef WP_TILE_BITONIC_GROUP_MASK
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
+// ROCm's warp-sync intrinsics require a 64-bit mask.
+#define WP_TILE_BITONIC_GROUP_MASK 0xffffffffffffffffull
+#else
 #define WP_TILE_BITONIC_GROUP_MASK 0xffffffffu
+#endif
 #endif
 
 struct UintKeyToUint {

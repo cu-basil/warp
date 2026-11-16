@@ -614,8 +614,13 @@ template <typename T, typename Shape> struct tile_vectorized_check_t {
             && "aligned=True but global address not 16-byte aligned"
         );
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-        if (reinterpret_cast<uint64_t>(global128) % sizeof(float4) != 0)
+        if (reinterpret_cast<uint64_t>(global128) % sizeof(float4) != 0) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_DEVICE_COMPILE__)
+            __builtin_trap();
+#else
             __trap();
+#endif
+        }
 #endif
 
 #ifndef NDEBUG
